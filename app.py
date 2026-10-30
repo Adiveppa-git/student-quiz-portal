@@ -6,28 +6,45 @@ from functools import wraps
 import os
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
 
 # Database Configuration
-# UPDATE THESE TO MATCH YOUR MYSQL SERVER
-DB_HOST = 'localhost'
-DB_USER = 'root'
-DB_PASSWORD = '' # Change this if your local mysql has a password
-DB_NAME = 'student_quiz_portal'
+# Environment variables allow deployment-specific credentials without changing source code.
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_USER = os.getenv('DB_USER', 'root')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+DB_NAME = os.getenv('DB_NAME', 'student_quiz_portal')
+
 
 def get_db_connection():
     try:
-        connection = pymysql.connect(
+        return pymysql.connect(
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME,
-            cursorclass=pymysql.cursors.DictCursor
+            cursorclass=pymysql.cursors.DictCursor,
+            charset='utf8mb4',
+            connect_timeout=5,
         )
-        return connection
-    except Exception as e:
-        print(f"Error connecting to MySQL: {e}")
+    except pymysql.MySQLError:
+        app.logger.exception('Database connection failed')
         return None
+
+
+def close_db_connection(connection):
+    if connection is not None and connection.open:
+        connection.close()
+
+
+def rollback_db(connection):
+    if connection is not None and connection.open:
+        connection.rollback()
+
+
+def flash_database_error(action='database operation'):
+    app.logger.exception('Failed to complete %s', action)
+    flash('The database could not complete your request. Please try again.', 'danger')
 
 # Decorator to check if user is logged in
 def login_required(f):
@@ -139,8 +156,9 @@ def register():
                 conn.commit()
                 flash('Registration successful! Please login.', 'success')
                 return redirect(url_for('login'))
-        except Exception as e:
-            flash(f"An error occurred: {e}", 'danger')
+        except pymysql.MySQLError:
+            rollback_db(conn)
+            flash_database_error('registration')
         finally:
             conn.close()
 
@@ -185,6 +203,9 @@ def admin_dashboard():
 @admin_required
 def manage_quizzes():
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
     if request.method == 'POST':
         action = request.form.get('action')
         
@@ -202,8 +223,9 @@ def manage_quizzes():
                     )
                     conn.commit()
                     flash('Quiz created successfully!', 'success')
-            except Exception as e:
-                flash(f"Error creating quiz: {e}", 'danger')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('quiz creation')
                 
         elif action == 'delete':
             quiz_id = request.form.get('quiz_id')
@@ -212,8 +234,9 @@ def manage_quizzes():
                     cursor.execute("DELETE FROM quizzes WHERE id = %s", (quiz_id,))
                     conn.commit()
                     flash('Quiz deleted successfully.', 'info')
-            except Exception as e:
-                flash(f"Error deleting quiz: {e}", 'danger')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('quiz deletion')
                 
         return redirect(url_for('manage_quizzes'))
 
@@ -235,6 +258,9 @@ def manage_quizzes():
 @admin_required
 def manage_questions(quiz_id):
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('manage_quizzes'))
     
     # Get quiz details
     try:
@@ -244,9 +270,9 @@ def manage_questions(quiz_id):
             if not quiz:
                 flash('Quiz not found.', 'danger')
                 return redirect(url_for('manage_quizzes'))
-    except Exception as e:
-        flash(f"Error fetching quiz: {e}", 'danger')
-        conn.close()
+    except pymysql.MySQLError:
+        flash_database_error('quiz lookup')
+        close_db_connection(conn)
         return redirect(url_for('manage_quizzes'))
 
     if request.method == 'POST':
@@ -268,8 +294,9 @@ def manage_questions(quiz_id):
                     )
                     conn.commit()
                     flash('Question added successfully!', 'success')
-            except Exception as e:
-                flash(f"Error adding question: {e}", 'danger')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question creation')
                 
         elif action == 'edit':
             q_id = request.form.get('question_id')
@@ -289,8 +316,9 @@ def manage_questions(quiz_id):
                     """, (q_text, opt_a, opt_b, opt_c, opt_d, correct, q_id, quiz_id))
                     conn.commit()
                     flash('Question updated successfully!', 'success')
-            except Exception as e:
-                flash(f"Error updating question: {e}", 'danger')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question update')
                 
         elif action == 'delete':
             q_id = request.form.get('question_id')
@@ -299,8 +327,9 @@ def manage_questions(quiz_id):
                     cursor.execute("DELETE FROM questions WHERE id = %s AND quiz_id = %s", (q_id, quiz_id))
                     conn.commit()
                     flash('Question deleted.', 'info')
-            except Exception as e:
-                flash(f"Error deleting question: {e}", 'danger')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question deletion')
                 
         return redirect(url_for('manage_questions', quiz_id=quiz_id))
 
@@ -318,6 +347,9 @@ def manage_questions(quiz_id):
 @admin_required
 def manage_students():
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
     students = []
     try:
         with conn.cursor() as cursor:
@@ -359,6 +391,9 @@ def student_dashboard():
 @student_required
 def take_quiz(quiz_id):
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
     try:
         with conn.cursor() as cursor:
             # Check if student already took this quiz
@@ -388,6 +423,9 @@ def take_quiz(quiz_id):
 @student_required
 def submit_quiz(quiz_id):
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
     try:
         with conn.cursor() as cursor:
             # Check again to prevent double submission
@@ -407,11 +445,16 @@ def submit_quiz(quiz_id):
                 if selected == q['correct_option']:
                     score += 1
                     
-            cursor.execute(
-                "INSERT INTO results (user_id, quiz_id, score, total_questions) VALUES (%s, %s, %s, %s)",
-                (session['user_id'], quiz_id, score, total)
-            )
-            conn.commit()
+            try:
+                cursor.execute(
+                    "INSERT INTO results (user_id, quiz_id, score, total_questions) VALUES (%s, %s, %s, %s)",
+                    (session['user_id'], quiz_id, score, total)
+                )
+                conn.commit()
+            except pymysql.err.IntegrityError:
+                rollback_db(conn)
+                flash('You have already submitted this quiz.', 'warning')
+                return redirect(url_for('student_result', quiz_id=quiz_id))
             flash('Quiz submitted successfully!', 'success')
             return redirect(url_for('student_result', quiz_id=quiz_id))
     finally:
@@ -421,6 +464,9 @@ def submit_quiz(quiz_id):
 @student_required
 def student_result(quiz_id):
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
@@ -443,6 +489,9 @@ def student_result(quiz_id):
 @student_required
 def student_history():
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
     results = []
     try:
         with conn.cursor() as cursor:
@@ -462,6 +511,9 @@ def student_history():
 @student_required
 def leaderboard():
     conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
     leaders = []
     try:
         with conn.cursor() as cursor:
@@ -479,6 +531,6 @@ def leaderboard():
         conn.close()
     return render_template('leaderboard.html', leaders=leaders)
 
-if __name__ == '__main__':
-    if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == "__main__":
+    debug_enabled = os.getenv('FLASK_DEBUG', '0') == '1'
+    app.run(host='127.0.0.1' if debug_enabled else '0.0.0.0', port=5000, debug=debug_enabled)
