@@ -30,6 +30,9 @@ class DatabaseSecurityTests(unittest.TestCase):
     def test_schema_has_unique_result_and_foreign_key_integrity(self):
         sql = Path(app.app.root_path).joinpath('database.sql').read_text(encoding='utf-8')
         self.assertIn('UNIQUE KEY uq_results_user_quiz (user_id, quiz_id)', sql)
+        self.assertIn('UNIQUE KEY uq_quiz_attempts_user_quiz (user_id, quiz_id)', sql)
+        self.assertIn('CREATE TABLE IF NOT EXISTS quiz_attempts', sql)
+        self.assertIn('INDEX idx_quiz_attempts_quiz_id (quiz_id)', sql)
         self.assertIn('FOREIGN KEY (user_id) REFERENCES users(id)', sql)
         self.assertIn('FOREIGN KEY (quiz_id) REFERENCES quizzes(id)', sql)
 

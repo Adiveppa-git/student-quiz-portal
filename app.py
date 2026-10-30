@@ -46,6 +46,60 @@ def flash_database_error(action='database operation'):
     app.logger.exception('Failed to complete %s', action)
     flash('The database could not complete your request. Please try again.', 'danger')
 
+
+def validate_quiz_time_limit(value):
+    try:
+        time_limit = int(value)
+    except (TypeError, ValueError):
+        return None
+    return time_limit if time_limit > 0 else None
+
+
+def get_or_create_quiz_attempt(cursor, user_id, quiz_id):
+    cursor.execute(
+        "INSERT IGNORE INTO quiz_attempts (user_id, quiz_id) VALUES (%s, %s)",
+        (user_id, quiz_id),
+    )
+    cursor.execute(
+        "SELECT started_at FROM quiz_attempts WHERE user_id = %s AND quiz_id = %s",
+        (user_id, quiz_id),
+    )
+    return cursor.fetchone()
+
+
+def get_quiz_attempt_status(cursor, user_id, quiz_id):
+    cursor.execute("""
+        SELECT a.started_at,
+               q.time_limit_minutes,
+               CASE
+                   WHEN CURRENT_TIMESTAMP() <= DATE_ADD(
+                       a.started_at,
+                       INTERVAL q.time_limit_minutes MINUTE
+                   ) THEN 0 ELSE 1
+               END AS expired
+        FROM quiz_attempts a
+        JOIN quizzes q ON q.id = a.quiz_id
+        WHERE a.user_id = %s AND a.quiz_id = %s
+    """, (user_id, quiz_id))
+    return cursor.fetchone()
+
+
+def insert_quiz_result_if_unexpired(cursor, user_id, quiz_id, score, total_questions):
+    cursor.execute("""
+        INSERT INTO results (user_id, quiz_id, score, total_questions)
+        SELECT %s, %s, %s, %s
+        FROM quiz_attempts a
+        JOIN quizzes q ON q.id = a.quiz_id
+        WHERE a.user_id = %s
+          AND a.quiz_id = %s
+          AND q.id = %s
+          AND CURRENT_TIMESTAMP() <= DATE_ADD(
+              a.started_at,
+              INTERVAL q.time_limit_minutes MINUTE
+          )
+    """, (user_id, quiz_id, score, total_questions, user_id, quiz_id, quiz_id))
+    return cursor.rowcount
+
 # Decorator to check if user is logged in
 def login_required(f):
     @wraps(f)
@@ -212,8 +266,13 @@ def manage_quizzes():
         if action == 'create':
             title = request.form.get('title')
             category = request.form.get('category')
-            time_limit = request.form.get('time_limit', 15)
+            time_limit = validate_quiz_time_limit(request.form.get('time_limit', 15))
             description = request.form.get('description')
+
+            if time_limit is None:
+                close_db_connection(conn)
+                flash('Time limit must be a positive whole number.', 'danger')
+                return redirect(url_for('manage_quizzes'))
             
             try:
                 with conn.cursor() as cursor:
@@ -237,7 +296,8 @@ def manage_quizzes():
             except pymysql.MySQLError:
                 rollback_db(conn)
                 flash_database_error('quiz deletion')
-                
+
+        close_db_connection(conn)
         return redirect(url_for('manage_quizzes'))
 
     quizzes = []
@@ -396,8 +456,10 @@ def take_quiz(quiz_id):
         return redirect(url_for('student_dashboard'))
     try:
         with conn.cursor() as cursor:
-            # Check if student already took this quiz
-            cursor.execute("SELECT id FROM results WHERE user_id = %s AND quiz_id = %s", (session['user_id'], quiz_id))
+            cursor.execute(
+                "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
+                (session['user_id'], quiz_id),
+            )
             if cursor.fetchone():
                 flash('You have already taken this quiz. View your results below.', 'warning')
                 return redirect(url_for('student_result', quiz_id=quiz_id))
@@ -407,17 +469,43 @@ def take_quiz(quiz_id):
             if not quiz:
                 flash('Quiz not found.', 'danger')
                 return redirect(url_for('student_dashboard'))
-                
-            cursor.execute("SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE quiz_id = %s", (quiz_id,))
+
+            cursor.execute(
+                "SELECT id, question_text, option_a, option_b, option_c, option_d "
+                "FROM questions WHERE quiz_id = %s",
+                (quiz_id,),
+            )
             questions = cursor.fetchall()
-            
             if not questions:
                 flash('This quiz has no questions yet.', 'info')
                 return redirect(url_for('student_dashboard'))
-                
+
+            time_limit = validate_quiz_time_limit(quiz.get('time_limit_minutes'))
+            if time_limit is None:
+                flash('This quiz has an invalid time limit.', 'danger')
+                return redirect(url_for('student_dashboard'))
+
+            attempt = get_or_create_quiz_attempt(cursor, session['user_id'], quiz_id)
+            if not attempt:
+                flash('Unable to start this quiz. Please try again.', 'danger')
+                return redirect(url_for('student_dashboard'))
+            conn.commit()
+
+            status = get_quiz_attempt_status(cursor, session['user_id'], quiz_id)
+            if not status:
+                flash('Unable to start this quiz. Please try again.', 'danger')
+                return redirect(url_for('student_dashboard'))
+            if status['expired']:
+                flash('The quiz deadline has expired.', 'danger')
+                return redirect(url_for('student_dashboard'))
+
             return render_template('quiz.html', quiz=quiz, questions=questions)
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('starting quiz attempt')
+        return redirect(url_for('student_dashboard'))
     finally:
-        conn.close()
+        close_db_connection(conn)
 
 @app.route('/student/quiz/<int:quiz_id>/submit', methods=['POST'])
 @student_required
@@ -428,28 +516,52 @@ def submit_quiz(quiz_id):
         return redirect(url_for('student_dashboard'))
     try:
         with conn.cursor() as cursor:
-            # Check again to prevent double submission
-            cursor.execute("SELECT id FROM results WHERE user_id = %s AND quiz_id = %s", (session['user_id'], quiz_id))
+            status = get_quiz_attempt_status(cursor, session['user_id'], quiz_id)
+            if not status:
+                flash('You must start the quiz before submitting it.', 'danger')
+                return redirect(url_for('take_quiz', quiz_id=quiz_id))
+
+            time_limit = validate_quiz_time_limit(status.get('time_limit_minutes'))
+            if time_limit is None:
+                flash('This quiz has an invalid time limit.', 'danger')
+                return redirect(url_for('student_dashboard'))
+            if status['expired']:
+                flash('The quiz deadline has expired. Your result was not submitted.', 'danger')
+                return redirect(url_for('student_dashboard'))
+
+            cursor.execute(
+                "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
+                (session['user_id'], quiz_id),
+            )
             if cursor.fetchone():
                 return redirect(url_for('student_result', quiz_id=quiz_id))
 
-            cursor.execute("SELECT id, correct_option FROM questions WHERE quiz_id = %s", (quiz_id,))
+            cursor.execute(
+                "SELECT id, correct_option FROM questions WHERE quiz_id = %s",
+                (quiz_id,),
+            )
             questions = cursor.fetchall()
-            
+
             score = 0
             total = len(questions)
-            
             for q in questions:
                 q_id = str(q['id'])
                 selected = request.form.get(f'question_{q_id}')
                 if selected == q['correct_option']:
                     score += 1
-                    
+
             try:
-                cursor.execute(
-                    "INSERT INTO results (user_id, quiz_id, score, total_questions) VALUES (%s, %s, %s, %s)",
-                    (session['user_id'], quiz_id, score, total)
+                inserted = insert_quiz_result_if_unexpired(
+                    cursor,
+                    session['user_id'],
+                    quiz_id,
+                    score,
+                    total,
                 )
+                if inserted != 1:
+                    rollback_db(conn)
+                    flash('The quiz deadline has expired. Your result was not submitted.', 'danger')
+                    return redirect(url_for('student_dashboard'))
                 conn.commit()
             except pymysql.err.IntegrityError:
                 rollback_db(conn)
@@ -457,8 +569,12 @@ def submit_quiz(quiz_id):
                 return redirect(url_for('student_result', quiz_id=quiz_id))
             flash('Quiz submitted successfully!', 'success')
             return redirect(url_for('student_result', quiz_id=quiz_id))
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('quiz submission')
+        return redirect(url_for('student_dashboard'))
     finally:
-        conn.close()
+        close_db_connection(conn)
 
 @app.route('/student/result/<int:quiz_id>')
 @student_required
