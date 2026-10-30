@@ -1,5 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import pymysql
 import pymysql.cursors
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,9 +16,27 @@ app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', '0') ==
 
 csrf = CSRFProtect(app)
 
+rate_limit_storage_uri = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
+if os.getenv('APP_ENV', '').lower() == 'production' and rate_limit_storage_uri.startswith('memory://'):
+    raise RuntimeError('RATELIMIT_STORAGE_URI must use a shared backend in production')
+if rate_limit_storage_uri.startswith('memory://'):
+    app.logger.warning('Using in-memory rate-limit storage; configure RATELIMIT_STORAGE_URI for production')
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    storage_uri=rate_limit_storage_uri,
+    strategy='fixed-window',
+    headers_enabled=True,
+)
+
 @app.errorhandler(CSRFError)
 def handle_csrf_error(error):
     return render_template('csrf_error.html', reason=error.description), 400
+
+@app.errorhandler(429)
+def handle_rate_limit_error(error):
+    return render_template('rate_limit_error.html', retry_after=getattr(error, 'retry_after', None)), 429
 
 # Database Configuration
 # Environment variables allow deployment-specific credentials without changing source code.
@@ -186,6 +206,8 @@ def index():
     return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit('10 per minute', methods=['POST'])
+@limiter.limit('50 per hour', methods=['POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username')
@@ -220,6 +242,8 @@ def login():
     return render_template('login.html')
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit('5 per minute', methods=['POST'])
+@limiter.limit('20 per hour', methods=['POST'])
 def register():
     if request.method == 'POST':
         username = request.form.get('username')
@@ -266,6 +290,7 @@ def register():
     return render_template('register.html')
 
 @app.route('/logout', methods=['POST'])
+@limiter.limit('20 per minute', methods=['POST'])
 def logout():
     session.clear()
     flash('You have been logged out.', 'info')
@@ -301,6 +326,7 @@ def admin_dashboard():
     return render_template('admin_dashboard.html', stats=stats, quizzes=recent_quizzes)
 
 @app.route('/admin/quizzes', methods=['GET', 'POST'])
+@limiter.limit('30 per minute', methods=['POST'])
 @admin_required
 def manage_quizzes():
     conn = get_db_connection()
@@ -362,6 +388,7 @@ def manage_quizzes():
     return render_template('manage_quizzes.html', quizzes=quizzes, categories=categories)
 
 @app.route('/admin/quizzes/<int:quiz_id>/questions', methods=['GET', 'POST'])
+@limiter.limit('30 per minute', methods=['POST'])
 @admin_required
 def manage_questions(quiz_id):
     conn = get_db_connection()
@@ -555,6 +582,7 @@ def take_quiz(quiz_id):
         close_db_connection(conn)
 
 @app.route('/student/quiz/<int:quiz_id>/submit', methods=['POST'])
+@limiter.limit('20 per minute', methods=['POST'])
 @student_required
 def submit_quiz(quiz_id):
     conn = get_db_connection()
