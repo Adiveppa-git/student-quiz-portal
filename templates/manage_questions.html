@@ -25,6 +25,7 @@
             </div>
             <div class="card-body px-4 pb-4">
                 <form method="POST" action="{{ url_for('manage_questions', quiz_id=quiz.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="action" value="create">
                     
                     <div class="mb-3">
@@ -121,6 +122,7 @@
                                     <div class="d-flex justify-content-end gap-2">
                                         <button class="btn btn-sm btn-outline-primary px-3 rounded-pill" data-bs-toggle="modal" data-bs-target="#editModal{{ question.id }}"><i class="fas fa-edit me-1"></i> Edit</button>
                                         <form method="POST" action="{{ url_for('manage_questions', quiz_id=quiz.id) }}" class="d-inline" onsubmit="return confirm('Delete this question permanently?');">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="question_id" value="{{ question.id }}">
                                             <button type="submit" class="btn btn-sm btn-outline-danger px-3 rounded-pill"><i class="fas fa-trash-alt me-1"></i> Delete</button>
@@ -139,6 +141,7 @@
                                         <button type="button" class="btn-close shadow-none" data-bs-dismiss="modal" aria-label="Close"></button>
                                     </div>
                                     <form method="POST" action="{{ url_for('manage_questions', quiz_id=quiz.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <div class="modal-body p-4">
                                             <input type="hidden" name="action" value="edit">
                                             <input type="hidden" name="question_id" value="{{ question.id }}">

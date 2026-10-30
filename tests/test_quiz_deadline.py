@@ -1,4 +1,5 @@
 import unittest
+import re
 from unittest.mock import MagicMock, patch
 
 import app
@@ -25,6 +26,14 @@ class QuizDeadlineTests(unittest.TestCase):
         connection.open = True
         connection.cursor.return_value.__enter__.return_value = cursor
         return connection
+
+    def post_with_csrf(self, path, data=None):
+        response = self.client.get('/login')
+        match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', response.get_data(as_text=True))
+        self.assertIsNotNone(match)
+        form_data = dict(data or {})
+        form_data['csrf_token'] = match.group(1)
+        return self.client.post(path, data=form_data)
 
     def test_new_attempt_records_start_time(self):
         cursor = MagicMock()
@@ -56,7 +65,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=None):
-            response = self.client.post('/student/quiz/7/submit')
+            response = self.post_with_csrf('/student/quiz/7/submit')
 
         self.assertEqual(response.status_code, 302)
         inserted_result = any(
@@ -74,7 +83,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=status):
-            response = self.client.post('/student/quiz/7/submit')
+            response = self.post_with_csrf('/student/quiz/7/submit')
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(cursor.fetchall.call_count, 0)
@@ -93,7 +102,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=status):
-            response = self.client.post('/student/quiz/7/submit', data={'question_1': 'A', 'question_2': 'C'})
+            response = self.post_with_csrf('/student/quiz/7/submit', {'question_1': 'A', 'question_2': 'C'})
 
         self.assertEqual(response.status_code, 302)
         connection.commit.assert_called_once()
@@ -112,7 +121,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=status):
-            response = self.client.post('/student/quiz/7/submit', data={'question_1': 'A'})
+            response = self.post_with_csrf('/student/quiz/7/submit', {'question_1': 'A'})
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(connection.commit.call_count, 0)
@@ -147,7 +156,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=status):
-            response = self.client.post('/student/quiz/7/submit', data={'question_1': 'A'})
+            response = self.post_with_csrf('/student/quiz/7/submit', {'question_1': 'A'})
 
         self.assertEqual(response.status_code, 302)
         connection.rollback.assert_called_once()
@@ -178,7 +187,7 @@ class QuizDeadlineTests(unittest.TestCase):
 
         with patch.object(app, 'get_db_connection', return_value=connection), \
              patch.object(app, 'get_quiz_attempt_status', return_value=status):
-            response = self.client.post('/student/quiz/7/submit', data={'question_1': 'A'})
+            response = self.post_with_csrf('/student/quiz/7/submit', {'question_1': 'A'})
 
         self.assertEqual(response.status_code, 302)
         connection.rollback.assert_called_once()

@@ -23,6 +23,7 @@
 <div class="row justify-content-center">
     <div class="col-md-10">
         <form id="quiz-form" method="POST" action="{{ url_for('submit_quiz', quiz_id=quiz.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% for q in questions %}
             <div class="card border-0 shadow-sm mb-4 question-card overflow-visible">
                 <div class="card-header bg-transparent p-4 border-bottom-0 pb-2">

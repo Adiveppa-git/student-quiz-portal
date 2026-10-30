@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask_wtf.csrf import CSRFProtect, CSRFError
 import pymysql
 import pymysql.cursors
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -10,6 +11,12 @@ app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', '0') == '1'
+
+csrf = CSRFProtect(app)
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(error):
+    return render_template('csrf_error.html', reason=error.description), 400
 
 # Database Configuration
 # Environment variables allow deployment-specific credentials without changing source code.
@@ -258,7 +265,7 @@ def register():
 
     return render_template('register.html')
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
     session.clear()
     flash('You have been logged out.', 'info')
