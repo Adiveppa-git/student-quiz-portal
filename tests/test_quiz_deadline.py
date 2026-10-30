@@ -8,6 +8,11 @@ class QuizDeadlineTests(unittest.TestCase):
     def setUp(self):
         app.app.config.update(TESTING=True, SECRET_KEY='deadline-test-secret')
         self.client = app.app.test_client()
+        self.role_validator = patch.object(app, 'is_session_role_valid', return_value=True)
+        self.role_validator.start()
+
+    def tearDown(self):
+        self.role_validator.stop()
 
     def student_session(self):
         with self.client.session_transaction() as session:

@@ -7,6 +7,9 @@ import os
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', '0') == '1'
 
 # Database Configuration
 # Environment variables allow deployment-specific credentials without changing source code.
@@ -100,6 +103,31 @@ def insert_quiz_result_if_unexpired(cursor, user_id, quiz_id, score, total_quest
     """, (user_id, quiz_id, score, total_questions, user_id, quiz_id, quiz_id))
     return cursor.rowcount
 
+def is_session_role_valid(expected_role):
+    user_id = session.get('user_id')
+    session_role = session.get('role')
+    if not user_id or session_role != expected_role:
+        return False
+
+    connection = get_db_connection()
+    if not connection:
+        return False
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT role FROM users WHERE id = %s", (user_id,))
+            account = cursor.fetchone()
+            if not account or account.get('role') != expected_role:
+                return False
+            session['role'] = account['role']
+            return True
+    except pymysql.MySQLError:
+        app.logger.exception('Failed to validate protected route authorization')
+        return False
+    finally:
+        close_db_connection(connection)
+
+
 # Decorator to check if user is logged in
 def login_required(f):
     @wraps(f)
@@ -110,21 +138,31 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
 # Decorator to check if user is admin
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_id' not in session or session.get('role') != 'admin':
+        if 'user_id' not in session:
+            flash('Please log in to access this page.', 'warning')
+            return redirect(url_for('login'))
+        if not is_session_role_valid('admin'):
+            session.clear()
             flash('Admin access required.', 'danger')
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
 
+
 # Decorator to check if user is student
 def student_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_id' not in session or session.get('role') != 'student':
+        if 'user_id' not in session:
+            flash('Please log in to access this page.', 'warning')
+            return redirect(url_for('login'))
+        if not is_session_role_valid('student'):
+            session.clear()
             flash('Student access required.', 'danger')
             return redirect(url_for('login'))
         return f(*args, **kwargs)
@@ -135,8 +173,9 @@ def index():
     if 'user_id' in session:
         if session.get('role') == 'admin':
             return redirect(url_for('admin_dashboard'))
-        else:
+        if session.get('role') == 'student':
             return redirect(url_for('student_dashboard'))
+        session.clear()
     return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -155,7 +194,8 @@ def login():
                 cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
                 user = cursor.fetchone()
 
-                if user and check_password_hash(user['password'], password):
+                if user and user.get('role') in ('admin', 'student') and check_password_hash(user['password'], password):
+                    session.clear()
                     session['user_id'] = user['id']
                     session['username'] = user['username']
                     session['role'] = user['role']
