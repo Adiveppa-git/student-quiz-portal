@@ -130,6 +130,56 @@ def insert_quiz_result_if_unexpired(cursor, user_id, quiz_id, score, total_quest
     """, (user_id, quiz_id, score, total_questions, user_id, quiz_id, quiz_id))
     return cursor.rowcount
 
+
+def validate_quiz_submission(form, expected_question_ids):
+    valid_answers = {'A', 'B', 'C', 'D'}
+    expected_ids = set(str(question_id) for question_id in expected_question_ids)
+    submitted_answers = {}
+    duplicate_ids = []
+    unknown_ids = []
+    unexpected_fields = []
+    invalid_answers = []
+
+    for field_name, values in form.lists():
+        if field_name == 'csrf_token':
+            continue
+        if not field_name.startswith('question_'):
+            unexpected_fields.append(field_name)
+            continue
+
+        question_id = field_name[len('question_'):]
+        if not question_id.isdigit() or question_id not in expected_ids:
+            unknown_ids.append(field_name)
+            continue
+        if len(values) != 1:
+            duplicate_ids.append(question_id)
+            continue
+
+        answer = values[0]
+        if answer not in valid_answers:
+            invalid_answers.append(question_id)
+            continue
+        submitted_answers[question_id] = answer
+
+    missing_ids = [
+        question_id for question_id in sorted(expected_ids, key=int)
+        if question_id not in submitted_answers
+    ]
+
+    if duplicate_ids:
+        return False, 'Duplicate answers for one or more quiz questions are not allowed.', submitted_answers
+    if unknown_ids:
+        return False, 'The submission contains unknown question IDs.', submitted_answers
+    if unexpected_fields:
+        return False, 'The submission contains unexpected fields.', submitted_answers
+    if invalid_answers:
+        return False, 'Answers must be one of A, B, C, or D.', submitted_answers
+    if missing_ids:
+        return False, 'Missing answers for one or more quiz questions.', submitted_answers
+
+    return True, None, submitted_answers
+
+
 def is_session_role_valid(expected_role):
     user_id = session.get('user_id')
     session_role = session.get('role')
@@ -605,23 +655,34 @@ def submit_quiz(quiz_id):
                 return redirect(url_for('student_dashboard'))
 
             cursor.execute(
+                "SELECT id, correct_option FROM questions WHERE quiz_id = %s",
+                (quiz_id,),
+            )
+            questions = cursor.fetchall()
+            expected_question_ids = [question['id'] for question in questions]
+            if not expected_question_ids:
+                flash('This quiz has no questions yet.', 'info')
+                return redirect(url_for('student_dashboard'))
+            valid_submission, validation_error, submitted_answers = validate_quiz_submission(
+                request.form,
+                expected_question_ids,
+            )
+            if not valid_submission:
+                flash(validation_error, 'danger')
+                return redirect(url_for('take_quiz', quiz_id=quiz_id))
+
+            cursor.execute(
                 "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
                 (session['user_id'], quiz_id),
             )
             if cursor.fetchone():
                 return redirect(url_for('student_result', quiz_id=quiz_id))
 
-            cursor.execute(
-                "SELECT id, correct_option FROM questions WHERE quiz_id = %s",
-                (quiz_id,),
-            )
-            questions = cursor.fetchall()
-
             score = 0
             total = len(questions)
             for q in questions:
                 q_id = str(q['id'])
-                selected = request.form.get(f'question_{q_id}')
+                selected = submitted_answers[q_id]
                 if selected == q['correct_option']:
                     score += 1
 
