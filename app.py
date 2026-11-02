@@ -1,9 +1,11 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import pymysql
 import pymysql.cursors
+import csv
+import io
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
@@ -83,6 +85,19 @@ def validate_quiz_time_limit(value):
     except (TypeError, ValueError):
         return None
     return time_limit if time_limit > 0 else None
+
+
+def sanitize_csv_cell(value):
+    if value is None:
+        return ''
+    if isinstance(value, (int, float)):
+        return value
+
+    text = str(value)
+    stripped = text.lstrip()
+    if text.startswith(('\t', '\r', '\n')) or stripped.startswith(('=', '+', '-', '@', '\t', '\r', '\n')):
+        return "'" + text
+    return text
 
 
 def get_or_create_quiz_attempt(cursor, user_id, quiz_id):
@@ -484,6 +499,107 @@ def manage_quizzes():
         conn.close()
 
     return render_template('manage_quizzes.html', quizzes=quizzes, categories=categories)
+
+@app.route('/admin/results/export')
+@app.route('/admin/quizzes/<int:quiz_id>/export')
+@admin_required
+def export_quiz_results(quiz_id=None):
+    if quiz_id is None:
+        quiz_id_value = request.args.get('quiz_id')
+        if quiz_id_value:
+            try:
+                quiz_id = int(quiz_id_value)
+            except (TypeError, ValueError):
+                flash('Invalid quiz selection.', 'danger')
+                return redirect(url_for('manage_quizzes'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    rows = []
+    quiz_title = 'all_quiz_results'
+    try:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT q.title AS quiz_name,
+                       u.username AS student_name,
+                       r.score,
+                       r.total_questions,
+                       r.score * 100.0 / NULLIF(r.total_questions, 0) AS percentage,
+                       r.date_taken AS submission_date
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                JOIN users u ON u.id = r.user_id
+                WHERE u.role = 'student'
+            """
+            params = None
+            if quiz_id is not None:
+                query += " AND r.quiz_id = %s"
+                params = (quiz_id,)
+
+                cursor.execute(
+                    "SELECT title FROM quizzes WHERE id = %s",
+                    (quiz_id,),
+                )
+                selected_quiz = cursor.fetchone()
+                if selected_quiz:
+                    quiz_title = str(selected_quiz['title']).strip().lower()
+                    quiz_title = ''.join(
+                        character if character.isalnum() else '_'
+                        for character in quiz_title
+                    ).strip('_') or 'quiz_results'
+                else:
+                    flash('Quiz not found.', 'danger')
+                    return redirect(url_for('manage_quizzes'))
+
+            query += " ORDER BY r.date_taken DESC, q.title ASC, u.username ASC"
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('quiz results export')
+        return redirect(url_for('admin_dashboard'))
+    finally:
+        close_db_connection(conn)
+
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow([
+        'Quiz Name',
+        'Student Name',
+        'Score',
+        'Total Marks',
+        'Percentage',
+        'Submission Date',
+    ])
+    for row in rows:
+        submission_date = row['submission_date']
+        if hasattr(submission_date, 'strftime'):
+            submission_date = submission_date.strftime('%Y-%m-%d %H:%M:%S')
+
+        percentage = row['percentage']
+        if percentage is not None:
+            percentage = f"{float(percentage):.1f}%"
+
+        writer.writerow([
+            sanitize_csv_cell(row['quiz_name']),
+            sanitize_csv_cell(row['student_name']),
+            sanitize_csv_cell(row['score']),
+            sanitize_csv_cell(row['total_questions']),
+            sanitize_csv_cell(percentage),
+            sanitize_csv_cell(submission_date),
+        ])
+
+    filename = f"{quiz_title}_results.csv" if quiz_id is not None else 'all_quiz_results.csv'
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+        },
+    )
 
 @app.route('/admin/quizzes/<int:quiz_id>/questions', methods=['GET', 'POST'])
 @limiter.limit('30 per minute', methods=['POST'])

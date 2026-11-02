@@ -7,6 +7,7 @@
         <p class="text-muted mb-0">Overview of your platform's activity and statistics.</p>
     </div>
     <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('export_quiz_results') }}" class="btn btn-outline-success shadow-sm rounded-pill px-4 me-2"><i class="fas fa-file-csv me-2"></i> Export All Results</a>
         <a href="{{ url_for('manage_quizzes') }}" class="btn btn-primary shadow-sm rounded-pill px-4"><i class="fas fa-plus me-2"></i> New Quiz</a>
     </div>
 </div>
@@ -187,6 +188,9 @@
                                     <td><span class="text-muted"><i class="far fa-clock me-1"></i> {{ quiz.time_limit_minutes }} mins</span></td>
                                     <td class="text-muted">{{ quiz.created_at.strftime('%Y-%m-%d %H:%M') if quiz.created_at else 'N/A' }}</td>
                                     <td class="text-end px-4">
+                                        <a href="{{ url_for('export_quiz_results', quiz_id=quiz.id) }}" class="btn btn-sm btn-light text-success fw-bold shadow-sm rounded-pill px-3 me-1" title="Export quiz results">
+                                            <i class="fas fa-file-csv me-1"></i> CSV
+                                        </a>
                                         <a href="{{ url_for('manage_questions', quiz_id=quiz.id) }}" class="btn btn-sm btn-light text-primary fw-bold shadow-sm rounded-pill px-3">
                                             Questions <i class="fas fa-arrow-right ms-1"></i>
                                         </a>
