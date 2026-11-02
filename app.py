@@ -379,6 +379,81 @@ def record_admin_audit(admin_user_id, action_type, entity_type=None, entity_id=N
     finally:
         close_db_connection(connection)
 
+
+def duplicate_quiz_in_transaction(cursor, source_quiz_id, admin_user_id):
+    cursor.execute(
+        """
+        SELECT id, title, description, category, time_limit_minutes
+        FROM quizzes
+        WHERE id = %s
+        """,
+        (source_quiz_id,),
+    )
+    source_quiz = cursor.fetchone()
+    if not source_quiz:
+        return None
+
+    time_limit = validate_quiz_time_limit(source_quiz.get('time_limit_minutes'))
+    if time_limit is None:
+        raise ValueError('The source quiz has an invalid time limit.')
+
+    copied_title = f"{source_quiz['title']} (Copy)"
+    copied_title = copied_title[:100]
+
+    cursor.execute(
+        """
+        INSERT INTO quizzes
+            (title, description, category, time_limit_minutes, created_by,
+             available_from, available_until)
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL)
+        """,
+        (
+            copied_title,
+            source_quiz.get('description'),
+            source_quiz.get('category'),
+            time_limit,
+            admin_user_id,
+        ),
+    )
+    new_quiz_id = cursor.lastrowid
+    if not new_quiz_id:
+        raise pymysql.MySQLError('Failed to create duplicated quiz.')
+
+    cursor.execute(
+        """
+        SELECT question_text, option_a, option_b, option_c, option_d, correct_option
+        FROM questions
+        WHERE quiz_id = %s
+        ORDER BY id ASC
+        """,
+        (source_quiz_id,),
+    )
+    source_questions = cursor.fetchall()
+
+    for question in source_questions:
+        cursor.execute(
+            """
+            INSERT INTO questions
+                (quiz_id, question_text, option_a, option_b, option_c, option_d, correct_option)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                new_quiz_id,
+                question['question_text'],
+                question['option_a'],
+                question['option_b'],
+                question['option_c'],
+                question['option_d'],
+                question['correct_option'],
+            ),
+        )
+
+    return {
+        'id': new_quiz_id,
+        'title': copied_title,
+        'question_count': len(source_questions),
+    }
+
 @app.route('/')
 def index():
     if 'user_id' in session:
@@ -612,6 +687,51 @@ def admin_audit_log():
         total_pages=total_pages,
         total_logs=total_logs,
     )
+
+
+@app.route('/admin/quizzes/<int:quiz_id>/duplicate', methods=['POST'])
+@limiter.limit('30 per minute', methods=['POST'])
+@admin_required
+def duplicate_quiz(quiz_id):
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('manage_quizzes'))
+
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            duplicated = duplicate_quiz_in_transaction(
+                cursor,
+                quiz_id,
+                session['user_id'],
+            )
+            if not duplicated:
+                rollback_db(conn)
+                flash('Quiz not found.', 'danger')
+                return redirect(url_for('manage_quizzes'))
+
+        conn.commit()
+        record_admin_audit(
+            session['user_id'],
+            'QUIZ_DUPLICATE',
+            'quiz',
+            duplicated['id'],
+            (
+                f'Duplicated quiz ID {quiz_id} as "{duplicated["title"]}" '
+                f'with {duplicated["question_count"]} question(s)'
+            ),
+        )
+        flash(f'Quiz duplicated successfully as "{duplicated["title"]}".', 'success')
+    except (pymysql.MySQLError, ValueError, TypeError):
+        rollback_db(conn)
+        app.logger.exception('Failed to duplicate quiz ID %s', quiz_id)
+        flash_database_error('quiz duplication')
+    finally:
+        close_db_connection(conn)
+
+    return redirect(url_for('manage_quizzes'))
+
 
 @app.route('/admin/quizzes', methods=['GET', 'POST'])
 @limiter.limit('30 per minute', methods=['POST'])
