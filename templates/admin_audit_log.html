@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h2 class="fw-bold mb-1"><i class="fas fa-shield-alt me-2 text-primary"></i> Admin Activity Audit Log</h2>
+        <p class="text-muted mb-0">{{ total_logs }} recorded administrative event{{ 's' if total_logs != 1 else '' }}.</p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Dashboard
+        </a>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Timestamp</th>
+                        <th>Administrator</th>
+                        <th>Action</th>
+                        <th>Entity</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if logs %}
+                        {% for log in logs %}
+                        <tr>
+                            <td class="ps-4 text-muted small">
+                                {{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') if log.created_at else 'N/A' }}
+                            </td>
+                            <td>
+                                <strong>{{ log.admin_username or ('Admin #' ~ log.admin_user_id) if log.admin_user_id else 'Unknown admin' }}</strong>
+                            </td>
+                            <td><span class="badge bg-primary bg-opacity-10 text-primary">{{ log.action_type }}</span></td>
+                            <td class="small text-muted">
+                                {% if log.entity_type or log.entity_id is not none %}
+                                    {{ log.entity_type or 'Entity' }}{% if log.entity_id is not none %} #{{ log.entity_id }}{% endif %}
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
+                            <td>{{ log.details or 'N/A' }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center py-5 text-muted">
+                                <i class="fas fa-clipboard-list fa-3x mb-3 text-light"></i>
+                                <p class="mb-0">No administrative activity has been recorded.</p>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if total_pages > 1 %}
+<nav class="mt-4" aria-label="Audit log pagination">
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+            <a class="page-link rounded-pill me-2" href="{{ url_for('admin_audit_log', page=page-1) }}" tabindex="-1">Previous</a>
+        </li>
+        {% for page_number in range(1, total_pages + 1) %}
+            {% if page_number <= 2 or page_number > total_pages - 2 or (page_number - page)|abs <= 2 %}
+            <li class="page-item {% if page_number == page %}active{% endif %}">
+                <a class="page-link rounded-circle mx-1" href="{{ url_for('admin_audit_log', page=page_number) }}">{{ page_number }}</a>
+            </li>
+            {% endif %}
+        {% endfor %}
+        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+            <a class="page-link rounded-pill ms-2" href="{{ url_for('admin_audit_log', page=page+1) }}">Next</a>
+        </li>
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}

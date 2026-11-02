@@ -285,6 +285,37 @@ def student_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+
+def record_admin_audit(admin_user_id, action_type, entity_type=None, entity_id=None, details=None):
+    """Write one admin audit event without interrupting the triggering operation."""
+    if not admin_user_id:
+        return False
+
+    connection = get_db_connection()
+    if not connection:
+        app.logger.warning('Admin audit log connection failed for action %s', action_type)
+        return False
+
+    try:
+        safe_details = str(details)[:500] if details else None
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO admin_audit_logs
+                    (admin_user_id, action_type, entity_type, entity_id, details)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (admin_user_id, action_type, entity_type, entity_id, safe_details),
+            )
+            connection.commit()
+            return True
+    except pymysql.MySQLError:
+        rollback_db(connection)
+        app.logger.exception('Failed to record admin audit action %s', action_type)
+        return False
+    finally:
+        close_db_connection(connection)
+
 @app.route('/')
 def index():
     if 'user_id' in session:
@@ -321,6 +352,11 @@ def login():
                     
                     flash('Logged in successfully.', 'success')
                     if user['role'] == 'admin':
+                        record_admin_audit(
+                            user['id'],
+                            'ADMIN_LOGIN',
+                            details='Administrator logged in',
+                        )
                         return redirect(url_for('admin_dashboard'))
                     else:
                         return redirect(url_for('student_dashboard'))
@@ -438,6 +474,82 @@ def admin_dashboard():
         quiz_performance=quiz_performance,
     )
 
+@app.route('/admin/audit-log')
+@admin_required
+def admin_audit_log():
+    page = request.args.get('page', 1, type=int)
+    if page < 1:
+        page = 1
+    per_page = 25
+    offset = (page - 1) * per_page
+
+    logs = []
+    total_logs = 0
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM admin_audit_logs")
+                count_row = cursor.fetchone()
+                total_logs = count_row['count'] if count_row else 0
+
+                cursor.execute(
+                    """
+                    SELECT a.id,
+                           a.admin_user_id,
+                           a.action_type,
+                           a.entity_type,
+                           a.entity_id,
+                           a.details,
+                           a.created_at,
+                           u.username AS admin_username
+                    FROM admin_audit_logs a
+                    LEFT JOIN users u ON u.id = a.admin_user_id
+                    ORDER BY a.created_at DESC, a.id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (per_page, offset),
+                )
+                logs = cursor.fetchall()
+        except pymysql.MySQLError:
+            flash_database_error('audit log lookup')
+        finally:
+            close_db_connection(conn)
+
+    total_pages = max(1, (total_logs + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+        offset = (page - 1) * per_page
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT a.id, a.admin_user_id, a.action_type, a.entity_type,
+                               a.entity_id, a.details, a.created_at,
+                               u.username AS admin_username
+                        FROM admin_audit_logs a
+                        LEFT JOIN users u ON u.id = a.admin_user_id
+                        ORDER BY a.created_at DESC, a.id DESC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (per_page, offset),
+                    )
+                    logs = cursor.fetchall()
+            except pymysql.MySQLError:
+                flash_database_error('audit log lookup')
+            finally:
+                close_db_connection(conn)
+
+    return render_template(
+        'admin_audit_log.html',
+        logs=logs,
+        page=page,
+        total_pages=total_pages,
+        total_logs=total_logs,
+    )
+
 @app.route('/admin/quizzes', methods=['GET', 'POST'])
 @limiter.limit('30 per minute', methods=['POST'])
 @admin_required
@@ -466,20 +578,76 @@ def manage_quizzes():
                         "INSERT INTO quizzes (title, category, time_limit_minutes, description, created_by) VALUES (%s, %s, %s, %s, %s)",
                         (title, category, time_limit, description, session['user_id'])
                     )
+                    quiz_id = cursor.lastrowid
                     conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUIZ_CREATE',
+                        'quiz',
+                        quiz_id,
+                        f'Created quiz "{title}"',
+                    )
                     flash('Quiz created successfully!', 'success')
             except pymysql.MySQLError:
                 rollback_db(conn)
                 flash_database_error('quiz creation')
+
+        elif action == 'edit':
+            quiz_id = request.form.get('quiz_id')
+            title = request.form.get('title')
+            category = request.form.get('category')
+            time_limit = validate_quiz_time_limit(request.form.get('time_limit'))
+            description = request.form.get('description')
+
+            if time_limit is None or not quiz_id:
+                close_db_connection(conn)
+                flash('Quiz ID and a valid time limit are required.', 'danger')
+                return redirect(url_for('manage_quizzes'))
+
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE quizzes
+                        SET title=%s, category=%s, time_limit_minutes=%s, description=%s
+                        WHERE id=%s
+                        """,
+                        (title, category, time_limit, description, quiz_id),
+                    )
+                    conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUIZ_UPDATE',
+                        'quiz',
+                        int(quiz_id),
+                        f'Modified quiz "{title}"',
+                    )
+                    flash('Quiz updated successfully!', 'success')
+            except (pymysql.MySQLError, ValueError, TypeError):
+                rollback_db(conn)
+                flash_database_error('quiz update')
                 
         elif action == 'delete':
             quiz_id = request.form.get('quiz_id')
             try:
+                quiz_entity_id = int(quiz_id)
+            except (TypeError, ValueError):
+                close_db_connection(conn)
+                flash('Invalid quiz selection.', 'danger')
+                return redirect(url_for('manage_quizzes'))
+            try:
                 with conn.cursor() as cursor:
                     cursor.execute("DELETE FROM quizzes WHERE id = %s", (quiz_id,))
                     conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUIZ_DELETE',
+                        'quiz',
+                        quiz_entity_id,
+                        'Deleted quiz',
+                    )
                     flash('Quiz deleted successfully.', 'info')
-            except pymysql.MySQLError:
+            except (pymysql.MySQLError, ValueError, TypeError):
                 rollback_db(conn)
                 flash_database_error('quiz deletion')
 
@@ -593,6 +761,20 @@ def export_quiz_results(quiz_id=None):
         ])
 
     filename = f"{quiz_title}_results.csv" if quiz_id is not None else 'all_quiz_results.csv'
+    if quiz_id is not None:
+        record_admin_audit(
+            session['user_id'],
+            'QUIZ_RESULTS_CSV_EXPORT',
+            'quiz',
+            quiz_id,
+            f'Exported quiz results CSV for quiz ID {quiz_id}; {len(rows)} result(s)',
+        )
+    else:
+        record_admin_audit(
+            session['user_id'],
+            'QUIZ_RESULTS_CSV_EXPORT',
+            details=f'Exported all quiz results CSV; {len(rows)} result(s)',
+        )
     return Response(
         output.getvalue(),
         mimetype='text/csv',
@@ -640,7 +822,15 @@ def manage_questions(quiz_id):
                         "INSERT INTO questions (quiz_id, question_text, option_a, option_b, option_c, option_d, correct_option) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (quiz_id, q_text, opt_a, opt_b, opt_c, opt_d, correct)
                     )
+                    question_id = cursor.lastrowid
                     conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUESTION_CREATE',
+                        'question',
+                        question_id,
+                        f'Created question in quiz ID {quiz_id}',
+                    )
                     flash('Question added successfully!', 'success')
             except pymysql.MySQLError:
                 rollback_db(conn)
@@ -648,6 +838,12 @@ def manage_questions(quiz_id):
                 
         elif action == 'edit':
             q_id = request.form.get('question_id')
+            try:
+                question_entity_id = int(q_id)
+            except (TypeError, ValueError):
+                close_db_connection(conn)
+                flash('Invalid question selection.', 'danger')
+                return redirect(url_for('manage_questions', quiz_id=quiz_id))
             q_text = request.form.get('question_text')
             opt_a = request.form.get('option_a')
             opt_b = request.form.get('option_b')
@@ -663,19 +859,39 @@ def manage_questions(quiz_id):
                         WHERE id=%s AND quiz_id=%s
                     """, (q_text, opt_a, opt_b, opt_c, opt_d, correct, q_id, quiz_id))
                     conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUESTION_UPDATE',
+                        'question',
+                        question_entity_id,
+                        f'Modified question in quiz ID {quiz_id}',
+                    )
                     flash('Question updated successfully!', 'success')
-            except pymysql.MySQLError:
+            except (pymysql.MySQLError, ValueError, TypeError):
                 rollback_db(conn)
                 flash_database_error('question update')
                 
         elif action == 'delete':
             q_id = request.form.get('question_id')
             try:
+                question_entity_id = int(q_id)
+            except (TypeError, ValueError):
+                close_db_connection(conn)
+                flash('Invalid question selection.', 'danger')
+                return redirect(url_for('manage_questions', quiz_id=quiz_id))
+            try:
                 with conn.cursor() as cursor:
                     cursor.execute("DELETE FROM questions WHERE id = %s AND quiz_id = %s", (q_id, quiz_id))
                     conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUESTION_DELETE',
+                        'question',
+                        question_entity_id,
+                        f'Deleted question from quiz ID {quiz_id}',
+                    )
                     flash('Question deleted.', 'info')
-            except pymysql.MySQLError:
+            except (pymysql.MySQLError, ValueError, TypeError):
                 rollback_db(conn)
                 flash_database_error('question deletion')
                 
