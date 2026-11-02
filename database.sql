@@ -63,4 +63,16 @@ CREATE TABLE IF NOT EXISTS results (
     INDEX idx_results_quiz_id (quiz_id)
 );
 
+-- Submitted answers for quiz review
+CREATE TABLE IF NOT EXISTS quiz_result_answers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    result_id INT NOT NULL,
+    question_id INT NOT NULL,
+    selected_option CHAR(1) NOT NULL,
+    FOREIGN KEY (result_id) REFERENCES results(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_quiz_result_answer (result_id, question_id),
+    INDEX idx_quiz_result_answers_question_id (question_id)
+);
+
 -- Admin accounts are created through an approved secure provisioning process; do not use a default password.

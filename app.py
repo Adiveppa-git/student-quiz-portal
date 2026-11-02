@@ -131,6 +131,31 @@ def insert_quiz_result_if_unexpired(cursor, user_id, quiz_id, score, total_quest
     return cursor.rowcount
 
 
+def save_quiz_result_answers(cursor, result_id, submitted_answers):
+    for question_id, selected_option in submitted_answers.items():
+        cursor.execute("""
+            INSERT INTO quiz_result_answers (result_id, question_id, selected_option)
+            VALUES (%s, %s, %s)
+        """, (result_id, int(question_id), selected_option))
+
+
+def compare_review_answer(question):
+    selected = question.get('selected_option')
+    correct = question.get('correct_option')
+    options = {
+        'A': question.get('option_a'),
+        'B': question.get('option_b'),
+        'C': question.get('option_c'),
+        'D': question.get('option_d'),
+    }
+    return {
+        **question,
+        'selected_text': options.get(selected),
+        'correct_text': options.get(correct),
+        'is_correct': bool(selected and selected == correct),
+    }
+
+
 def validate_quiz_submission(form, expected_question_ids):
     valid_answers = {'A', 'B', 'C', 'D'}
     expected_ids = set(str(question_id) for question_id in expected_question_ids)
@@ -721,6 +746,18 @@ def submit_quiz(quiz_id):
                     rollback_db(conn)
                     flash('The quiz deadline has expired. Your result was not submitted.', 'danger')
                     return redirect(url_for('student_dashboard'))
+
+                cursor.execute(
+                    "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
+                    (session['user_id'], quiz_id),
+                )
+                submitted_result = cursor.fetchone()
+                if submitted_result and submitted_result.get('id') is not None:
+                    save_quiz_result_answers(
+                        cursor,
+                        submitted_result['id'],
+                        submitted_answers,
+                    )
                 conn.commit()
             except pymysql.err.IntegrityError:
                 rollback_db(conn)
@@ -756,9 +793,71 @@ def student_result(quiz_id):
                 flash('Result not found.', 'danger')
                 return redirect(url_for('student_dashboard'))
                 
-            return render_template('result.html', result=result)
+            return render_template('result.html', result=result, review_quiz_id=quiz_id)
     finally:
         conn.close()
+
+@app.route('/student/result/<int:quiz_id>/review')
+@student_required
+def student_quiz_review(quiz_id):
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_dashboard'))
+
+    result = None
+    questions = []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT r.id, r.user_id, r.quiz_id, r.score, r.total_questions,
+                       r.date_taken, q.title, q.category
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                WHERE r.user_id = %s AND r.quiz_id = %s
+            """, (session['user_id'], quiz_id))
+            result = cursor.fetchone()
+
+            if not result:
+                flash('You have not completed this quiz.', 'danger')
+                return redirect(url_for('student_dashboard'))
+
+            cursor.execute("""
+                SELECT qu.id,
+                       qu.question_text,
+                       qu.option_a,
+                       qu.option_b,
+                       qu.option_c,
+                       qu.option_d,
+                       qu.correct_option,
+                       qra.selected_option
+                FROM questions qu
+                LEFT JOIN quiz_result_answers qra
+                  ON qra.question_id = qu.id
+                 AND qra.result_id = %s
+                WHERE qu.quiz_id = %s
+                ORDER BY qu.id ASC
+            """, (result['id'], quiz_id))
+            questions = cursor.fetchall()
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('quiz review')
+        return redirect(url_for('student_result', quiz_id=quiz_id))
+    finally:
+        conn.close()
+
+    percentage = None
+    if result['total_questions'] > 0:
+        percentage = round(result['score'] * 100.0 / result['total_questions'], 1)
+
+    questions = [compare_review_answer(question) for question in questions]
+
+    return render_template(
+        'quiz_review.html',
+        result=result,
+        questions=questions,
+        percentage=percentage,
+    )
 
 @app.route('/student/history')
 @student_required

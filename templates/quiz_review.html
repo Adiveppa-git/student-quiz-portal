@@ -1,0 +1,106 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h2 class="fw-bold mb-1">
+            <i class="fas fa-list-check me-2 text-primary"></i> Quiz Review
+        </h2>
+        <p class="text-muted mb-0">{{ result.title }}</p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('student_history') }}" class="btn btn-outline-secondary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Quiz History
+        </a>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-4 mb-3">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <div class="stat-value">{{ result.score }} / {{ result.total_questions }}</div>
+                <div class="stat-label">Final Score</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <div class="stat-value">{{ percentage | round(1) if percentage is not none else 'N/A' }}{% if percentage is not none %}%{% endif %}</div>
+                <div class="stat-label">Percentage</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <div class="stat-value fs-4">{{ result.date_taken.strftime('%Y-%m-%d') if result.date_taken else 'N/A' }}</div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if questions %}
+<div class="row">
+    <div class="col-12">
+        {% for q in questions %}
+        {% if q.is_correct %}
+            {% set status_class = 'border-success bg-success bg-opacity-10' %}
+            {% set status_text = 'Correct' %}
+            {% set status_icon = 'fa-circle-check text-success' %}
+        {% else %}
+            {% set status_class = 'border-danger bg-danger bg-opacity-10' %}
+            {% set status_text = 'Incorrect' %}
+            {% set status_icon = 'fa-circle-xmark text-danger' %}
+        {% endif %}
+        <div class="card border-0 shadow-sm mb-4 {{ status_class }}" style="border-left-width: 5px !important;">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <h5 class="fw-bold text-dark mb-0">
+                        <span class="badge bg-primary rounded-circle me-2">{{ loop.index }}</span>
+                        {{ q.question_text }}
+                    </h5>
+                    <span class="badge bg-white border text-dark px-3 py-2 ms-3" aria-label="Answer status: {{ status_text }}">
+                        <i class="fas {{ status_icon }} me-1" aria-hidden="true"></i>{{ status_text }}
+                    </span>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="p-3 rounded border bg-white h-100">
+                            <div class="small text-muted fw-bold text-uppercase mb-1">Your Answer</div>
+                            {% if q.selected_option %}
+                                <strong>{{ q.selected_option }}.</strong> {{ q.selected_text or 'N/A' }}
+                            {% else %}
+                                <span class="text-muted">No answer recorded</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="p-3 rounded border bg-white h-100">
+                            <div class="small text-muted fw-bold text-uppercase mb-1">Correct Answer</div>
+                            {% if q.correct_option %}
+                                <strong>{{ q.correct_option }}.</strong> {{ q.correct_text or 'N/A' }}
+                            {% else %}
+                                <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5 text-muted">
+        <i class="fas fa-circle-question fa-3x mb-3 text-light"></i>
+        <h5 class="text-dark">No review data available</h5>
+        <p class="mb-0">This quiz has no stored questions or answer data yet.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

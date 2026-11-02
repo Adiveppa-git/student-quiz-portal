@@ -150,6 +150,11 @@
                                         {% else %}
                                             <span class="badge bg-danger bg-opacity-10 text-danger rounded-pill px-3 py-2 fw-bold">{{ percentage }}%</span>
                                         {% endif %}
+                                        {% if r.quiz_id is defined %}
+                                            <a href="{{ url_for('student_quiz_review', quiz_id=r.quiz_id) }}" class="btn btn-sm btn-outline-primary rounded-pill ms-2">
+                                                Review
+                                            </a>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
