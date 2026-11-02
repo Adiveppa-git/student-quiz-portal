@@ -70,6 +70,13 @@ This project demonstrates real-world concepts like authentication, database inte
 - Role-based access control
 - Input validation
 
+## Quiz Availability Timezone
+Quiz scheduling values are stored and compared as UTC. Administrator inputs labeled
+`Available From` and `Available Until` must be entered in UTC. MySQL schedule
+checks use `UTC_TIMESTAMP()` so server-side availability does not depend on browser
+time zones. The existing per-attempt quiz time limit remains separate from quiz
+scheduling availability.
+
 ---
 
 # 🧩 Technology Stack

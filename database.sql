@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS quizzes (
     time_limit_minutes INT DEFAULT 15,
     created_by INT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    available_from DATETIME NULL,
+    available_until DATETIME NULL,
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 

@@ -9,6 +9,7 @@ import io
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
@@ -87,6 +88,56 @@ def validate_quiz_time_limit(value):
     return time_limit if time_limit > 0 else None
 
 
+def parse_quiz_schedule_value(value):
+    if value is None or str(value).strip() == '':
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except (TypeError, ValueError):
+        return False
+
+
+def validate_quiz_schedule(start_value=None, end_value=None):
+    start = parse_quiz_schedule_value(start_value)
+    end = parse_quiz_schedule_value(end_value)
+    if start is False or end is False:
+        return False, None, None, 'Enter valid start and end dates and times.'
+    if start is not None and end is not None and start >= end:
+        return False, None, None, 'The quiz end time must be after the start time.'
+    return True, start, end, None
+
+
+def normalize_schedule_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_quiz_availability(quiz, now=None):
+    start = normalize_schedule_datetime(quiz.get('available_from'))
+    end = normalize_schedule_datetime(quiz.get('available_until'))
+    current = normalize_schedule_datetime(now) if now is not None else datetime.now(timezone.utc).replace(tzinfo=None)
+
+    if start is not None and current < start:
+        return 'upcoming'
+    if end is not None and current > end:
+        return 'closed'
+    return 'active'
+
+
 def sanitize_csv_cell(value):
     if value is None:
         return ''
@@ -116,12 +167,22 @@ def get_quiz_attempt_status(cursor, user_id, quiz_id):
     cursor.execute("""
         SELECT a.started_at,
                q.time_limit_minutes,
+               q.available_from,
+               q.available_until,
                CASE
                    WHEN CURRENT_TIMESTAMP() <= DATE_ADD(
                        a.started_at,
                        INTERVAL q.time_limit_minutes MINUTE
                    ) THEN 0 ELSE 1
                END AS expired
+               ,
+               CASE
+                   WHEN q.available_from IS NOT NULL
+                    AND UTC_TIMESTAMP() < q.available_from THEN 1
+                   WHEN q.available_until IS NOT NULL
+                    AND UTC_TIMESTAMP() > q.available_until THEN 1
+                   ELSE 0
+               END AS schedule_closed
         FROM quiz_attempts a
         JOIN quizzes q ON q.id = a.quiz_id
         WHERE a.user_id = %s AND a.quiz_id = %s
@@ -142,6 +203,8 @@ def insert_quiz_result_if_unexpired(cursor, user_id, quiz_id, score, total_quest
               a.started_at,
               INTERVAL q.time_limit_minutes MINUTE
           )
+          AND (q.available_from IS NULL OR UTC_TIMESTAMP() >= q.available_from)
+          AND (q.available_until IS NULL OR UTC_TIMESTAMP() <= q.available_until)
     """, (user_id, quiz_id, score, total_questions, user_id, quiz_id, quiz_id))
     return cursor.rowcount
 
@@ -566,17 +629,25 @@ def manage_quizzes():
             category = request.form.get('category')
             time_limit = validate_quiz_time_limit(request.form.get('time_limit', 15))
             description = request.form.get('description')
+            valid_schedule, available_from, available_until, schedule_error = validate_quiz_schedule(
+                request.form.get('available_from'),
+                request.form.get('available_until'),
+            )
 
             if time_limit is None:
                 close_db_connection(conn)
                 flash('Time limit must be a positive whole number.', 'danger')
                 return redirect(url_for('manage_quizzes'))
+            if not valid_schedule:
+                close_db_connection(conn)
+                flash(schedule_error, 'danger')
+                return redirect(url_for('manage_quizzes'))
             
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "INSERT INTO quizzes (title, category, time_limit_minutes, description, created_by) VALUES (%s, %s, %s, %s, %s)",
-                        (title, category, time_limit, description, session['user_id'])
+                        "INSERT INTO quizzes (title, category, time_limit_minutes, description, created_by, available_from, available_until) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (title, category, time_limit, description, session['user_id'], available_from, available_until)
                     )
                     quiz_id = cursor.lastrowid
                     conn.commit()
@@ -598,10 +669,18 @@ def manage_quizzes():
             category = request.form.get('category')
             time_limit = validate_quiz_time_limit(request.form.get('time_limit'))
             description = request.form.get('description')
+            valid_schedule, available_from, available_until, schedule_error = validate_quiz_schedule(
+                request.form.get('available_from'),
+                request.form.get('available_until'),
+            )
 
             if time_limit is None or not quiz_id:
                 close_db_connection(conn)
                 flash('Quiz ID and a valid time limit are required.', 'danger')
+                return redirect(url_for('manage_quizzes'))
+            if not valid_schedule:
+                close_db_connection(conn)
+                flash(schedule_error, 'danger')
                 return redirect(url_for('manage_quizzes'))
 
             try:
@@ -609,10 +688,11 @@ def manage_quizzes():
                     cursor.execute(
                         """
                         UPDATE quizzes
-                        SET title=%s, category=%s, time_limit_minutes=%s, description=%s
+                        SET title=%s, category=%s, time_limit_minutes=%s, description=%s,
+                            available_from=%s, available_until=%s
                         WHERE id=%s
                         """,
-                        (title, category, time_limit, description, quiz_id),
+                        (title, category, time_limit, description, available_from, available_until, quiz_id),
                     )
                     conn.commit()
                     record_admin_audit(
@@ -946,6 +1026,8 @@ def student_dashboard():
             with conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM quizzes ORDER BY created_at DESC")
                 quizzes = cursor.fetchall()
+                for quiz in quizzes:
+                    quiz['availability_status'] = classify_quiz_availability(quiz)
         finally:
             conn.close()
             
@@ -972,6 +1054,13 @@ def take_quiz(quiz_id):
             quiz = cursor.fetchone()
             if not quiz:
                 flash('Quiz not found.', 'danger')
+                return redirect(url_for('student_dashboard'))
+            availability_status = classify_quiz_availability(quiz)
+            if availability_status == 'upcoming':
+                flash('This quiz has not started yet.', 'warning')
+                return redirect(url_for('student_dashboard'))
+            if availability_status == 'closed':
+                flash('This quiz has closed.', 'warning')
                 return redirect(url_for('student_dashboard'))
 
             cursor.execute(
@@ -1032,6 +1121,9 @@ def submit_quiz(quiz_id):
                 return redirect(url_for('student_dashboard'))
             if status['expired']:
                 flash('The quiz deadline has expired. Your result was not submitted.', 'danger')
+                return redirect(url_for('student_dashboard'))
+            if status.get('schedule_closed') == 1:
+                flash('This quiz is not currently available. Your result was not submitted.', 'danger')
                 return redirect(url_for('student_dashboard'))
 
             cursor.execute(

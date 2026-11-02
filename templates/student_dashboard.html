@@ -41,6 +41,13 @@
                         <h5 class="card-title fw-bold text-dark mb-0 pe-2">{{ quiz.title }}</h5>
                         <span class="badge bg-primary bg-opacity-10 text-primary rounded-pill px-3 py-2">{{ quiz.category }}</span>
                     </div>
+                    {% if quiz.availability_status == 'upcoming' %}
+                        <span class="badge bg-info bg-opacity-10 text-info mb-3">Upcoming</span>
+                    {% elif quiz.availability_status == 'closed' %}
+                        <span class="badge bg-secondary bg-opacity-10 text-secondary mb-3">Closed</span>
+                    {% else %}
+                        <span class="badge bg-success bg-opacity-10 text-success mb-3">Active</span>
+                    {% endif %}
                     <p class="card-text text-muted mb-4">{{ quiz.description[:120] }}{% if quiz.description and quiz.description|length > 120 %}...{% endif %}</p>
                     
                     <div class="d-flex justify-content-start gap-4 mb-2 text-muted small fw-bold">
@@ -49,9 +56,15 @@
                     </div>
                 </div>
                 <div class="card-footer bg-transparent border-top-0 pt-0 pb-4 px-4">
-                    <a href="{{ url_for('take_quiz', quiz_id=quiz.id) }}" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold">
-                        Start Quiz <i class="fas fa-arrow-right ms-2"></i>
-                    </a>
+                    {% if quiz.availability_status == 'active' %}
+                        <a href="{{ url_for('take_quiz', quiz_id=quiz.id) }}" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold">
+                            Start Quiz <i class="fas fa-arrow-right ms-2"></i>
+                        </a>
+                    {% elif quiz.availability_status == 'upcoming' %}
+                        <button type="button" class="btn btn-outline-info w-100 rounded-pill py-2 fw-bold" disabled>Not Started Yet</button>
+                    {% else %}
+                        <button type="button" class="btn btn-outline-secondary w-100 rounded-pill py-2 fw-bold" disabled>Quiz Closed</button>
+                    {% endif %}
                 </div>
             </div>
         </div>

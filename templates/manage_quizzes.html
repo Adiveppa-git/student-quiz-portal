@@ -50,6 +50,15 @@
                         <label for="description" class="form-label">Description</label>
                         <textarea class="form-control" id="description" name="description" rows="3" placeholder="Brief description of the quiz..."></textarea>
                     </div>
+
+                    <div class="mb-3">
+                        <label for="available_from" class="form-label">Available From (UTC, optional)</label>
+                        <input type="datetime-local" class="form-control" id="available_from" name="available_from">
+                    </div>
+                    <div class="mb-4">
+                        <label for="available_until" class="form-label">Available Until (UTC, optional)</label>
+                        <input type="datetime-local" class="form-control" id="available_until" name="available_until">
+                    </div>
                     
                     <button type="submit" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm"><i class="fas fa-save me-2"></i> Save Quiz</button>
                 </form>
@@ -155,6 +164,14 @@
                         <div class="mb-3">
                             <label for="editDescription{{ quiz.id }}" class="form-label">Description</label>
                             <textarea id="editDescription{{ quiz.id }}" class="form-control" name="description" rows="3">{{ quiz.description or '' }}</textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="editAvailableFrom{{ quiz.id }}" class="form-label">Available From (UTC, optional)</label>
+                            <input id="editAvailableFrom{{ quiz.id }}" type="datetime-local" class="form-control" name="available_from" value="{% if quiz.available_from %}{{ quiz.available_from.strftime('%Y-%m-%dT%H:%M') }}{% endif %}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="editAvailableUntil{{ quiz.id }}" class="form-label">Available Until (UTC, optional)</label>
+                            <input id="editAvailableUntil{{ quiz.id }}" type="datetime-local" class="form-control" name="available_until" value="{% if quiz.available_until %}{{ quiz.available_until.strftime('%Y-%m-%dT%H:%M') }}{% endif %}">
                         </div>
                     </div>
                     <div class="modal-footer border-0">
