@@ -11,6 +11,93 @@
     </div>
 </div>
 
+{% if results %}
+<div class="row g-4 mb-5">
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-chart-line stat-icon text-primary"></i>
+                <div class="stat-value">
+                    {% if performance.average_percentage is not none %}{{ performance.average_percentage | round(1) }}%{% else %}N/A{% endif %}
+                </div>
+                <div class="stat-label">Overall Average</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-arrow-up stat-icon text-success"></i>
+                <div class="stat-value">
+                    {% if performance.highest_percentage is not none %}{{ performance.highest_percentage | round(1) }}%{% else %}N/A{% endif %}
+                </div>
+                <div class="stat-label">Highest Score</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-arrow-down stat-icon text-danger"></i>
+                <div class="stat-value">
+                    {% if performance.lowest_percentage is not none %}{{ performance.lowest_percentage | round(1) }}%{% else %}N/A{% endif %}
+                </div>
+                <div class="stat-label">Lowest Score</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-5">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-chart-bar me-2 text-primary"></i> Performance by Quiz</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-column gap-3">
+                    {% for r in results %}
+                        {% set percentage = r.percentage if r.percentage is defined and r.percentage is not none else none %}
+                        {% if percentage is none %}
+                            <div>
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="small fw-bold text-dark text-truncate me-2">{{ r.title }}</span>
+                                    <span class="small text-muted">N/A</span>
+                                </div>
+                                <div class="progress bg-light" style="height: 12px;">
+                                    <div class="progress-bar bg-secondary" style="width: 0%;"></div>
+                                </div>
+                            </div>
+                        {% else %}
+                        {% set chart_percentage = percentage | round(1) %}
+                        {% if chart_percentage < 0 %}
+                            {% set chart_width = 0 %}
+                        {% elif chart_percentage > 100 %}
+                            {% set chart_width = 100 %}
+                        {% else %}
+                            {% set chart_width = chart_percentage %}
+                        {% endif %}
+                        <div>
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="small fw-bold text-dark text-truncate me-2">{{ r.title }}</span>
+                                <span class="small fw-bold text-primary">{{ chart_percentage }}%</span>
+                            </div>
+                            <div class="progress" style="height: 12px;" role="progressbar"
+                                 aria-label="{{ r.title }} score"
+                                 aria-valuemin="0" aria-valuemax="100"
+                                 aria-valuenow="{{ chart_percentage }}">
+                                <div class="progress-bar bg-primary rounded-pill" style="width: {{ chart_width }}%;"></div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="row">
     <div class="col-12">
         <div class="card border-0 shadow-sm">
@@ -32,7 +119,13 @@
                         <tbody>
                             {% if results %}
                                 {% for r in results %}
-                                {% set percentage = (r.score / r.total_questions * 100) | round(1) %}
+                                {% if r.percentage is defined and r.percentage is not none %}
+                                    {% set percentage = r.percentage | round(1) %}
+                                {% elif r.total_questions and r.total_questions > 0 %}
+                                    {% set percentage = (r.score / r.total_questions * 100) | round(1) %}
+                                {% else %}
+                                    {% set percentage = none %}
+                                {% endif %}
                                 <tr>
                                     <td class="ps-4">
                                         <div class="d-flex align-items-center">
@@ -43,12 +136,14 @@
                                         </div>
                                     </td>
                                     <td><span class="badge bg-primary bg-opacity-10 text-primary">{{ r.category }}</span></td>
-                                    <td class="text-muted"><i class="far fa-calendar-alt me-1"></i> {{ r.date_taken.strftime('%Y-%m-%d %H:%M') }}</td>
+                                    <td class="text-muted"><i class="far fa-calendar-alt me-1"></i> {{ r.date_taken.strftime('%Y-%m-%d %H:%M') if r.date_taken else 'N/A' }}</td>
                                     <td class="text-center">
                                         <span class="fw-bold text-dark fs-5">{{ r.score }}</span> <span class="text-muted">/ {{ r.total_questions }}</span>
                                     </td>
                                     <td class="text-end pe-4">
-                                        {% if percentage >= 80 %}
+                                        {% if percentage is none %}
+                                            <span class="badge bg-secondary bg-opacity-10 text-secondary rounded-pill px-3 py-2 fw-bold">N/A</span>
+                                        {% elif percentage >= 80 %}
                                             <span class="badge bg-success bg-opacity-10 text-success rounded-pill px-3 py-2 fw-bold">{{ percentage }}%</span>
                                         {% elif percentage >= 50 %}
                                             <span class="badge bg-primary bg-opacity-10 text-primary rounded-pill px-3 py-2 fw-bold">{{ percentage }}%</span>

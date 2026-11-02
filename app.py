@@ -768,19 +768,40 @@ def student_history():
         flash('Database connection failed. Please try again.', 'danger')
         return redirect(url_for('student_dashboard'))
     results = []
+    performance = {
+        'average_percentage': None,
+        'highest_percentage': None,
+        'lowest_percentage': None,
+    }
     try:
         with conn.cursor() as cursor:
             cursor.execute('''
-                SELECT r.*, q.title, q.category 
+                SELECT r.*,
+                       q.title,
+                       q.category,
+                       r.score * 100.0 / NULLIF(r.total_questions, 0) AS percentage
                 FROM results r 
                 JOIN quizzes q ON r.quiz_id = q.id 
                 WHERE r.user_id = %s
                 ORDER BY r.date_taken DESC
             ''', (session['user_id'],))
             results = cursor.fetchall()
+
+            cursor.execute('''
+                SELECT AVG(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS average_percentage,
+                       MAX(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS highest_percentage,
+                       MIN(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS lowest_percentage
+                FROM results r
+                WHERE r.user_id = %s
+            ''', (session['user_id'],))
+            performance = cursor.fetchone() or performance
     finally:
         conn.close()
-    return render_template('history.html', results=results)
+    return render_template(
+        'history.html',
+        results=results,
+        performance=performance,
+    )
 
 @app.route('/student/leaderboard')
 @student_required
