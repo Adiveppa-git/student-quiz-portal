@@ -44,6 +44,116 @@
 </div>
 
 <div class="row">
+    <div class="col-12 mb-5">
+        <div class="card border-0">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-chart-bar me-2 text-primary"></i> Quiz Performance Analytics</h5>
+            </div>
+            <div class="card-body">
+                {% if quiz_performance %}
+                    <div class="row g-4">
+                        <div class="col-lg-7">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Quiz</th>
+                                            <th class="text-center">Completed</th>
+                                            <th class="text-center">Average</th>
+                                            <th class="text-center">Highest</th>
+                                            <th class="text-center">Lowest</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for quiz in quiz_performance %}
+                                        <tr>
+                                            <td>
+                                                <strong class="text-dark">{{ quiz.title }}</strong>
+                                                {% if quiz.category %}
+                                                    <span class="d-block small text-muted">{{ quiz.category }}</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-center">{{ quiz.submission_count }}</td>
+                                            <td class="text-center">
+                                                {% if quiz.average_percentage is not none %}
+                                                    <span class="fw-bold text-primary">{{ quiz.average_percentage | round(1) }}%</span>
+                                                {% else %}
+                                                    <span class="text-muted">N/A</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-center">
+                                                {% if quiz.highest_score is not none %}
+                                                    {{ quiz.highest_score }}
+                                                {% else %}
+                                                    <span class="text-muted">N/A</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-center">
+                                                {% if quiz.lowest_score is not none %}
+                                                    {{ quiz.lowest_score }}
+                                                {% else %}
+                                                    <span class="text-muted">N/A</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <h6 class="fw-bold text-muted mb-3">Average Score by Quiz</h6>
+                            <div class="d-flex flex-column gap-3">
+                                {% for quiz in quiz_performance %}
+                                    {% if quiz.average_percentage is not none %}
+                                        <div>
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small fw-bold text-dark text-truncate me-2">{{ quiz.title }}</span>
+                                                <span class="small fw-bold text-primary">{{ quiz.average_percentage | round(1) }}%</span>
+                                            </div>
+                                            {% set chart_average = quiz.average_percentage | round(1) %}
+                                            {% if chart_average < 0 %}
+                                                {% set chart_width = 0 %}
+                                            {% elif chart_average > 100 %}
+                                                {% set chart_width = 100 %}
+                                            {% else %}
+                                                {% set chart_width = chart_average %}
+                                            {% endif %}
+                                            <div class="progress" style="height: 12px;" role="progressbar"
+                                                 aria-label="{{ quiz.title }} average score"
+                                                 aria-valuemin="0" aria-valuemax="100"
+                                                 aria-valuenow="{{ quiz.average_percentage | round(1) }}">
+                                                <div class="progress-bar bg-primary rounded-pill"
+                                                     style="width: {{ chart_width }}%;"></div>
+                                            </div>
+                                        </div>
+                                    {% else %}
+                                        <div>
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <span class="small fw-bold text-dark text-truncate me-2">{{ quiz.title }}</span>
+                                                <span class="small text-muted">N/A</span>
+                                            </div>
+                                            <div class="progress bg-light" style="height: 12px;">
+                                                <div class="progress-bar bg-secondary" style="width: 0%;"></div>
+                                            </div>
+                                        </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                {% else %}
+                    <div class="text-center py-5 text-muted">
+                        <i class="fas fa-chart-line fa-3x mb-3 text-light"></i>
+                        <p class="mb-0">No quizzes found. Quiz performance will appear here once quizzes are created.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
     <div class="col-12">
         <div class="card border-0">
             <div class="card-header bg-transparent py-4 d-flex justify-content-between align-items-center">

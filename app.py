@@ -355,6 +355,7 @@ def admin_dashboard():
     conn = get_db_connection()
     stats = {'students': 0, 'quizzes': 0, 'questions': 0}
     recent_quizzes = []
+    quiz_performance = []
     
     if conn:
         try:
@@ -370,10 +371,32 @@ def admin_dashboard():
                 
                 cursor.execute("SELECT * FROM quizzes ORDER BY created_at DESC LIMIT 5")
                 recent_quizzes = cursor.fetchall()
+
+                cursor.execute("""
+                    SELECT q.id,
+                           q.title,
+                           q.category,
+                           COUNT(r.id) AS submission_count,
+                           AVG(
+                               r.score * 100.0 / NULLIF(r.total_questions, 0)
+                           ) AS average_percentage,
+                           MAX(r.score) AS highest_score,
+                           MIN(r.score) AS lowest_score
+                    FROM quizzes q
+                    LEFT JOIN results r ON r.quiz_id = q.id
+                    GROUP BY q.id, q.title, q.category
+                    ORDER BY q.title ASC
+                """)
+                quiz_performance = cursor.fetchall()
         finally:
             conn.close()
             
-    return render_template('admin_dashboard.html', stats=stats, quizzes=recent_quizzes)
+    return render_template(
+        'admin_dashboard.html',
+        stats=stats,
+        quizzes=recent_quizzes,
+        quiz_performance=quiz_performance,
+    )
 
 @app.route('/admin/quizzes', methods=['GET', 'POST'])
 @limiter.limit('30 per minute', methods=['POST'])
