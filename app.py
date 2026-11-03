@@ -165,6 +165,93 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+QUESTION_BANK_CSV_HEADERS = [
+    'question_text',
+    'option_a',
+    'option_b',
+    'option_c',
+    'option_d',
+    'correct_option',
+    'category',
+    'difficulty',
+]
+QUESTION_BANK_CSV_MAX_BYTES = 1024 * 1024
+
+
+def parse_question_bank_csv(upload):
+    """Parse and validate one uploaded UTF-8 CSV; database duplicates are handled separately."""
+    filename = getattr(upload, 'filename', '') or ''
+    if not filename.lower().endswith('.csv'):
+        return None, [], [], 'Please upload a file with a .csv extension.'
+
+    raw = upload.stream.read(QUESTION_BANK_CSV_MAX_BYTES + 1)
+    if len(raw) > QUESTION_BANK_CSV_MAX_BYTES:
+        return None, [], [], 'CSV file must be 1 MB or smaller.'
+    if not raw:
+        return None, [], [], 'CSV file is empty.'
+
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return None, [], [], 'CSV file must be UTF-8 encoded.'
+    if not text.strip():
+        return None, [], [], 'CSV file is empty.'
+
+    try:
+        reader = csv.DictReader(
+            io.StringIO(text, newline=''),
+            restkey='__extra_fields__',
+            restval='',
+            strict=True,
+        )
+        headers = [
+            str(header).strip().lower().replace(' ', '_')
+            for header in (reader.fieldnames or [])
+        ]
+    except csv.Error as error:
+        return None, [], [], f'Malformed CSV: {error}'
+
+    missing_headers = [header for header in QUESTION_BANK_CSV_HEADERS if header not in headers]
+    if missing_headers:
+        return None, [], [], (
+            'Missing required columns: ' + ', '.join(missing_headers)
+        )
+
+    normalized_rows = []
+    invalid_rows = []
+    try:
+        reader.fieldnames = headers
+        for row_number, row in enumerate(reader, start=2):
+            if '__extra_fields__' in row and row['__extra_fields__']:
+                invalid_rows.append({
+                    'row': row_number,
+                    'error': 'Row contains more values than the CSV header defines.',
+                })
+                continue
+
+            values = {header: (row.get(header) or '').strip() for header in headers}
+            valid, normalized, error = validate_question_bank_payload(
+                category=values.get('category'),
+                difficulty=values.get('difficulty'),
+                question_text=values.get('question_text'),
+                option_a=values.get('option_a'),
+                option_b=values.get('option_b'),
+                option_c=values.get('option_c'),
+                option_d=values.get('option_d'),
+                correct_option=values.get('correct_option'),
+            )
+            if not valid:
+                invalid_rows.append({'row': row_number, 'error': error})
+                continue
+            normalized_rows.append(normalized)
+    except csv.Error as error:
+        return None, [], [], f'Malformed CSV near row {reader.line_num}: {error}'
+
+    if not normalized_rows and not invalid_rows:
+        return None, [], [], 'CSV file contains no question rows.'
+    return normalized_rows, invalid_rows, [], None
+
+
 def copy_question_bank_to_quiz(cursor, quiz_id, bank_question_ids):
     """Append bank-question snapshots to a quiz without linking completed history."""
     normalized_ids = []
@@ -976,6 +1063,159 @@ def manage_question_bank():
         category_filter=category_filter,
         difficulty_filter=difficulty_filter,
     )
+
+
+@app.route('/admin/question-bank/export.csv')
+@admin_required
+def export_question_bank_csv():
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('manage_question_bank'))
+
+    questions = []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT question_text, option_a, option_b, option_c, option_d,
+                       correct_option, category, difficulty
+                FROM question_bank
+                ORDER BY category ASC, difficulty ASC, id ASC
+            """)
+            questions = cursor.fetchall()
+    except pymysql.MySQLError:
+        flash_database_error('question-bank export')
+        close_db_connection(conn)
+        return redirect(url_for('manage_question_bank'))
+    finally:
+        close_db_connection(conn)
+
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow(QUESTION_BANK_CSV_HEADERS)
+    for question in questions:
+        writer.writerow([
+            sanitize_csv_cell(question.get('question_text')),
+            sanitize_csv_cell(question.get('option_a')),
+            sanitize_csv_cell(question.get('option_b')),
+            sanitize_csv_cell(question.get('option_c')),
+            sanitize_csv_cell(question.get('option_d')),
+            sanitize_csv_cell(question.get('correct_option')),
+            sanitize_csv_cell(question.get('category')),
+            sanitize_csv_cell(question.get('difficulty')),
+        ])
+
+    record_admin_audit(
+        session['user_id'],
+        'QUESTION_BANK_CSV_EXPORT',
+        'question_bank',
+        details=f'Exported {len(questions)} question-bank question(s)',
+    )
+    return Response(
+        '\ufeff' + output.getvalue(),
+        mimetype='text/csv; charset=utf-8',
+        headers={
+            'Content-Disposition': 'attachment; filename="question_bank.csv"',
+        },
+    )
+
+
+@app.route('/admin/question-bank/import', methods=['POST'])
+@limiter.limit('10 per minute', methods=['POST'])
+@admin_required
+def import_question_bank_csv():
+    upload = request.files.get('csv_file')
+    if upload is None or not upload.filename:
+        flash('Please select a CSV file to import.', 'danger')
+        return redirect(url_for('manage_question_bank'))
+
+    rows, invalid_rows, _, parse_error = parse_question_bank_csv(upload)
+    if parse_error:
+        flash(parse_error, 'danger')
+        return redirect(url_for('manage_question_bank'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('manage_question_bank'))
+
+    imported = 0
+    skipped = 0
+    seen = set()
+    try:
+        conn.begin()
+        with conn.cursor() as cursor:
+            for values in rows:
+                fingerprint = tuple(
+                    values[field]
+                    for field in QUESTION_BANK_CSV_HEADERS
+                )
+                if fingerprint in seen:
+                    skipped += 1
+                    continue
+                seen.add(fingerprint)
+
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM question_bank
+                    WHERE question_text=%s AND option_a=%s AND option_b=%s
+                      AND option_c=%s AND option_d=%s AND correct_option=%s
+                      AND category=%s AND difficulty=%s
+                    """,
+                    fingerprint,
+                )
+                duplicate = cursor.fetchone()
+                if duplicate and duplicate.get('count', 0) > 0:
+                    skipped += 1
+                    continue
+
+                cursor.execute(
+                    """
+                    INSERT INTO question_bank
+                        (question_text, option_a, option_b, option_c, option_d,
+                         correct_option, category, difficulty, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        values['question_text'], values['option_a'],
+                        values['option_b'], values['option_c'],
+                        values['option_d'], values['correct_option'],
+                        values['category'], values['difficulty'],
+                        session['user_id'],
+                    ),
+                )
+                imported += 1
+        conn.commit()
+        record_admin_audit(
+            session['user_id'],
+            'QUESTION_BANK_CSV_IMPORT',
+            'question_bank',
+            details=(
+                f'CSV import summary: {imported} imported, '
+                f'{skipped} skipped, {len(invalid_rows)} invalid'
+            ),
+        )
+    except (pymysql.MySQLError, ValueError, TypeError):
+        rollback_db(conn)
+        imported = 0
+        skipped = 0
+        flash_database_error('question-bank CSV import')
+    finally:
+        close_db_connection(conn)
+
+    if imported or skipped or invalid_rows:
+        flash(
+            (
+                f'CSV import summary: {imported} imported, '
+                f'{skipped} skipped, {len(invalid_rows)} invalid.'
+            ),
+            'success' if imported and not invalid_rows else 'warning',
+        )
+        for invalid in invalid_rows[:10]:
+            flash(f"Row {invalid['row']}: {invalid['error']}", 'danger')
+        if len(invalid_rows) > 10:
+            flash(f'{len(invalid_rows) - 10} additional invalid row(s) omitted.', 'danger')
+    return redirect(url_for('manage_question_bank'))
 
 
 @app.route('/admin/quizzes/<int:quiz_id>/duplicate', methods=['POST'])
