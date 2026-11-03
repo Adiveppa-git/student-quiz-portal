@@ -77,6 +77,17 @@ class CsrfProtectionTests(unittest.TestCase):
         response = self.client.post('/admin/quizzes', data={'action': 'create', 'title': 'Quiz'})
         self.assertEqual(response.status_code, 400)
 
+    def test_missing_csrf_token_is_rejected_on_bulk_question_bank_post(self):
+        with self.client.session_transaction() as session:
+            session.update(user_id=1, username='admin', role='admin')
+
+        response = self.client.post('/admin/question-bank', data={
+            'action': 'bulk_delete',
+            'question_ids': ['55'],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b'Security validation failed', response.data)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -97,14 +97,42 @@
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-transparent py-3 d-flex justify-content-between">
                 <h5 class="mb-0 fw-bold">Reusable Questions</h5>
-                <span class="badge bg-primary rounded-pill">{{ questions|length }}</span>
+                <span class="badge bg-primary rounded-pill">{{ total_questions }}</span>
             </div>
             <div class="card-body p-0">
                 {% if questions %}
+                <form id="bulkActionsForm" method="POST" class="border-bottom bg-light px-3 py-3">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <button type="button" id="selectAllQuestions" class="btn btn-sm btn-outline-primary rounded-pill">Select All</button>
+                        <button type="button" id="clearSelectedQuestions" class="btn btn-sm btn-outline-secondary rounded-pill">Clear Selection</button>
+                        <span class="small text-muted ms-1"><strong id="selectedQuestionCount">0</strong> selected</span>
+                    </div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-4">
+                            <label class="form-label small mb-1" for="bulkCategory">Category</label>
+                            <input id="bulkCategory" class="form-control form-control-sm" name="bulk_category" maxlength="50" placeholder="Set category">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1" for="bulkDifficulty">Difficulty</label>
+                            <select id="bulkDifficulty" class="form-select form-select-sm" name="bulk_difficulty">
+                                <option value="">Keep difficulty</option>
+                                <option value="easy">Easy</option>
+                                <option value="medium">Medium</option>
+                                <option value="hard">Hard</option>
+                            </select>
+                        </div>
+                        <div class="col-md-5 text-md-end">
+                            <button type="submit" name="action" value="bulk_update" class="btn btn-sm btn-primary rounded-pill px-3">Update Selected</button>
+                            <button type="submit" name="action" value="bulk_delete" class="btn btn-sm btn-outline-danger rounded-pill px-3" onclick="return confirmBulkDelete();">Delete Selected</button>
+                        </div>
+                    </div>
+                </form>
                 <div class="accordion accordion-flush" id="bankAccordion">
                     {% for question in questions %}
                     <div class="accordion-item">
-                        <h2 class="accordion-header">
+                        <h2 class="accordion-header d-flex align-items-center px-3">
+                            <input class="form-check-input question-select me-3" type="checkbox" name="question_ids" value="{{ question.id }}" form="bulkActionsForm" aria-label="Select question {{ question.id }}">
                             <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#bank{{ question.id }}">
                                 <span class="fw-bold me-2">{{ question.question_text }}</span>
                                 <span class="badge bg-info bg-opacity-10 text-info ms-auto me-2">{{ question.category }}</span>
@@ -136,6 +164,29 @@
                 <div class="text-center text-muted py-5">No reusable questions match these filters.</div>
                 {% endif %}
             </div>
+            {% if total_pages > 1 %}
+            <div class="card-footer bg-transparent py-3">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <span class="small text-muted">Page {{ page }} of {{ total_pages }}</span>
+                    <nav aria-label="Question bank pages">
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                                <a class="page-link rounded-start-pill" href="{{ url_for('manage_question_bank', page=page-1, search=search, category=category_filter, difficulty=difficulty_filter) }}">Previous</a>
+                            </li>
+                            <li class="page-item disabled"><span class="page-link">{{ page }}</span></li>
+                            <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                                <a class="page-link rounded-end-pill" href="{{ url_for('manage_question_bank', page=page+1, search=search, category=category_filter, difficulty=difficulty_filter) }}">Next</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            </div>
+            {% endif %}
+            {% if total_pages == 0 %}
+            <div class="card-footer bg-transparent py-3 text-center small text-muted">Page 1 of 0</div>
+            {% elif total_pages == 1 %}
+            <div class="card-footer bg-transparent py-3 text-center small text-muted">Page 1 of 1</div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -195,4 +246,46 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const checkboxes = Array.from(document.querySelectorAll('.question-select'));
+    const count = document.getElementById('selectedQuestionCount');
+    const selectAll = document.getElementById('selectAllQuestions');
+    const clearAll = document.getElementById('clearSelectedQuestions');
+
+    function updateCount() {
+        const selected = checkboxes.filter(function (checkbox) { return checkbox.checked; });
+        if (count) count.textContent = selected.length;
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('click', function () {
+            checkboxes.forEach(function (checkbox) { checkbox.checked = true; });
+            updateCount();
+        });
+    }
+    if (clearAll) {
+        clearAll.addEventListener('click', function () {
+            checkboxes.forEach(function (checkbox) { checkbox.checked = false; });
+            updateCount();
+        });
+    }
+    checkboxes.forEach(function (checkbox) {
+        checkbox.addEventListener('change', updateCount);
+    });
+    updateCount();
+
+    window.confirmBulkDelete = function () {
+        const selected = checkboxes.filter(function (checkbox) { return checkbox.checked; });
+        if (!selected.length) {
+            alert('Select at least one question to delete.');
+            return false;
+        }
+        return confirm('Delete ' + selected.length + ' selected reusable question(s)? Existing quiz copies will remain unchanged.');
+    };
+});
+</script>
 {% endblock %}

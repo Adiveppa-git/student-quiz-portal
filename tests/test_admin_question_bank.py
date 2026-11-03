@@ -421,6 +421,177 @@ class AdminQuestionBankTests(unittest.TestCase):
         self.assertIsNone(rows)
         self.assertIn('1 MB or smaller', error)
 
+    def test_bulk_actions_ui_and_selected_count_are_rendered(self):
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [
+            [{'category': 'Programming'}],
+            [{
+                'id': 55,
+                'question_text': 'Question?',
+                'option_a': 'A',
+                'option_b': 'B',
+                'option_c': 'C',
+                'option_d': 'D',
+                'correct_option': 'A',
+                'category': 'Programming',
+                'difficulty': 'medium',
+            }],
+        ]
+        cursor.fetchone.return_value = {'count': 1}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get('/admin/question-bank')
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="question_ids"', html)
+        self.assertIn('Select All', html)
+        self.assertIn('Clear Selection', html)
+        self.assertIn('selected', html)
+
+    def test_admin_can_bulk_delete_selected_questions(self):
+        connection, cursor = self.mock_connection()
+        cursor.rowcount = 1
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection), \
+             patch.object(app, 'record_admin_audit') as audit:
+            token = self.get_token_from_mock(connection, cursor)
+            cursor.fetchall.side_effect = [[{'id': 55}]]
+            response = self.client.post('/admin/question-bank', data={
+                'csrf_token': token,
+                'action': 'bulk_delete',
+                'question_ids': ['55', '56'],
+            })
+
+        self.assertEqual(response.status_code, 302)
+        delete_calls = [c for c in cursor.execute.call_args_list if c.args[0].startswith('DELETE FROM question_bank WHERE id IN')]
+        self.assertEqual(len(delete_calls), 1)
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.args[1], 'QUESTION_BANK_BULK_DELETE')
+
+    def test_admin_can_bulk_update_category_and_difficulty(self):
+        connection, cursor = self.mock_connection()
+        cursor.rowcount = 1
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection), \
+             patch.object(app, 'record_admin_audit') as audit:
+            token = self.get_token_from_mock(connection, cursor)
+            cursor.fetchall.side_effect = [[{'id': 55}]]
+            response = self.client.post('/admin/question-bank', data={
+                'csrf_token': token,
+                'action': 'bulk_update',
+                'question_ids': ['55'],
+                'bulk_category': 'Databases',
+                'bulk_difficulty': 'hard',
+            })
+
+        self.assertEqual(response.status_code, 302)
+        update_call = [c for c in cursor.execute.call_args_list if c.args[0].startswith('UPDATE question_bank')][0]
+        self.assertIn('category=%s', update_call.args[0])
+        self.assertIn('difficulty=%s', update_call.args[0])
+        audit.assert_called_once()
+        self.assertEqual(audit.call_args.args[1], 'QUESTION_BANK_BULK_UPDATE')
+
+    def test_bulk_actions_reject_empty_invalid_and_nonexistent_ids(self):
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.return_value = []
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            token = self.get_token_from_mock(connection, cursor)
+            for data in (
+                {'csrf_token': token, 'action': 'bulk_delete'},
+                {'csrf_token': token, 'action': 'bulk_delete', 'question_ids': ['abc']},
+                {'csrf_token': token, 'action': 'bulk_delete', 'question_ids': ['99999']},
+                {'csrf_token': token, 'action': 'bulk_update', 'question_ids': ['99999'],
+                 'bulk_category': 'General'},
+            ):
+                response = self.client.post('/admin/question-bank', data=data)
+                self.assertEqual(response.status_code, 302)
+
+    def test_bulk_update_rejects_invalid_values_without_updating(self):
+        connection, cursor = self.mock_connection()
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            token = self.get_token_from_mock(connection, cursor)
+            response = self.client.post('/admin/question-bank', data={
+                'csrf_token': token,
+                'action': 'bulk_update',
+                'question_ids': ['55'],
+                'bulk_category': 'x' * 51,
+                'bulk_difficulty': 'extreme',
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(any(
+            c.args[0].startswith('UPDATE question_bank')
+            for c in cursor.execute.call_args_list
+        ))
+
+    def test_pagination_preserves_filters_and_clamps_invalid_pages(self):
+        for page in ('abc', '-2'):
+            connection, cursor = self.mock_connection()
+            cursor.fetchall.side_effect = [
+                [{'category': 'Programming'}],
+                [{
+                    'id': 55,
+                    'question_text': 'Question?',
+                    'option_a': 'A',
+                    'option_b': 'B',
+                    'option_c': 'C',
+                    'option_d': 'D',
+                    'correct_option': 'A',
+                    'category': 'Programming',
+                    'difficulty': 'medium',
+                }],
+            ]
+            cursor.fetchone.return_value = {'count': 21}
+
+            with patch.object(app, 'is_session_role_valid', return_value=True), \
+                 patch.object(app, 'get_db_connection', return_value=connection):
+                response = self.client.get(
+                    '/admin/question-bank?page=' + page
+                    + '&search=compare&category=Programming&difficulty=medium'
+                )
+
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertIn('search=compare', html)
+            self.assertIn('category=Programming', html)
+            self.assertIn('difficulty=medium', html)
+            query_calls = [c for c in cursor.execute.call_args_list if c.args[0].startswith('SELECT * FROM question_bank')]
+            self.assertEqual(query_calls[0].args[1][-1], 0)
+
+    def test_empty_results_and_out_of_range_page_are_safe(self):
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], []]
+        cursor.fetchone.return_value = {'count': 0}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get('/admin/question-bank?page=999')
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('No reusable questions match these filters.', html)
+        self.assertIn('Page 1 of 0', html)
+
+    def test_student_cannot_perform_bulk_actions(self):
+        login_page = self.client.get('/login')
+        match = re.search(r'name="csrf_token"[^>]*value="([^"]+)"', login_page.get_data(as_text=True))
+        self.assertIsNotNone(match)
+        with self.client.session_transaction() as session:
+            session.update(user_id=4, username='student', role='student')
+        with patch.object(app, 'is_session_role_valid', return_value=False):
+            response = self.client.post('/admin/question-bank', data={
+                'csrf_token': match.group(1),
+                'action': 'bulk_delete',
+                'question_ids': ['55'],
+            })
+        self.assertEqual(response.status_code, 302)
+
     def test_migration_and_database_schema_include_question_bank_fields(self):
         root = Path(app.app.root_path)
         schema = root.joinpath('database.sql').read_text(encoding='utf-8')

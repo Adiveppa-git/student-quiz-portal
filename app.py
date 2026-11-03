@@ -165,6 +165,34 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+def normalize_question_bank_ids(raw_ids):
+    """Return unique positive integer IDs, or None when any submitted ID is invalid."""
+    if not raw_ids:
+        return None
+
+    normalized = []
+    for raw_id in raw_ids:
+        for part in str(raw_id).split(','):
+            part = part.strip()
+            try:
+                question_id = int(part)
+            except (TypeError, ValueError):
+                return None
+            if question_id <= 0:
+                return None
+            if question_id not in normalized:
+                normalized.append(question_id)
+    return normalized or None
+
+
+def parse_positive_page(raw_page):
+    try:
+        page = int(raw_page)
+    except (TypeError, ValueError):
+        return 1
+    return page if page > 0 else 1
+
+
 QUESTION_BANK_CSV_HEADERS = [
     'question_text',
     'option_a',
@@ -973,6 +1001,137 @@ def manage_question_bank():
             finally:
                 close_db_connection(conn)
 
+        elif action in ('bulk_delete', 'delete_selected', 'bulk-delete'):
+            raw_ids = request.form.getlist('question_ids') or request.form.getlist('selected_ids')
+            if not raw_ids:
+                raw_ids = request.form.getlist('question_id')
+            selected_ids = normalize_question_bank_ids(raw_ids)
+            if selected_ids is None:
+                close_db_connection(conn)
+                flash('Select at least one valid question.', 'danger')
+                return redirect(url_for('manage_question_bank'))
+
+            placeholders = ', '.join(['%s'] * len(selected_ids))
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        f"SELECT id FROM question_bank WHERE id IN ({placeholders})",
+                        tuple(selected_ids),
+                    )
+                    existing_ids = [row['id'] for row in cursor.fetchall() if row.get('id')]
+                    if not existing_ids:
+                        rollback_db(conn)
+                        close_db_connection(conn)
+                        flash('No selected question-bank questions were found.', 'danger')
+                        return redirect(url_for('manage_question_bank'))
+
+                    placeholders = ', '.join(['%s'] * len(existing_ids))
+                    cursor.execute(
+                        f"DELETE FROM question_bank WHERE id IN ({placeholders})",
+                        tuple(existing_ids),
+                    )
+                    deleted_count = cursor.rowcount
+                    conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUESTION_BANK_BULK_DELETE',
+                        'question_bank',
+                        None,
+                        f'Deleted {deleted_count} reusable question(s): IDs {", ".join(str(i) for i in existing_ids)}',
+                    )
+                    if deleted_count == len(selected_ids):
+                        flash(f'{deleted_count} question(s) deleted from the question bank.', 'success')
+                    else:
+                        flash(
+                            f'{deleted_count} question(s) deleted; some selected IDs were not found.',
+                            'warning',
+                        )
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('bulk question-bank deletion')
+            finally:
+                close_db_connection(conn)
+
+        elif action in ('bulk_update', 'update_selected', 'bulk-update'):
+            raw_ids = request.form.getlist('question_ids') or request.form.getlist('selected_ids')
+            if not raw_ids:
+                raw_ids = request.form.getlist('question_id')
+            selected_ids = normalize_question_bank_ids(raw_ids)
+            if selected_ids is None:
+                close_db_connection(conn)
+                flash('Select at least one valid question.', 'danger')
+                return redirect(url_for('manage_question_bank'))
+
+            category = str(
+                request.form.get('bulk_category', request.form.get('category', ''))
+            ).strip()
+            difficulty = str(
+                request.form.get('bulk_difficulty', request.form.get('difficulty', ''))
+            ).strip().lower()
+            updates = {}
+            if category:
+                if len(category) > 50:
+                    close_db_connection(conn)
+                    flash('Category must be 50 characters or fewer.', 'danger')
+                    return redirect(url_for('manage_question_bank'))
+                updates['category'] = category
+            if difficulty:
+                if difficulty not in ('easy', 'medium', 'hard'):
+                    close_db_connection(conn)
+                    flash('Difficulty must be easy, medium, or hard.', 'danger')
+                    return redirect(url_for('manage_question_bank'))
+                updates['difficulty'] = difficulty
+            if not updates:
+                close_db_connection(conn)
+                flash('Choose a category or difficulty to update.', 'danger')
+                return redirect(url_for('manage_question_bank'))
+
+            placeholders = ', '.join(['%s'] * len(selected_ids))
+            assignments = ', '.join([f'{column}=%s' for column in updates])
+            params = list(updates.values()) + selected_ids
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        f"SELECT id FROM question_bank WHERE id IN ({placeholders})",
+                        tuple(selected_ids),
+                    )
+                    existing_ids = [row['id'] for row in cursor.fetchall() if row.get('id')]
+                    if not existing_ids:
+                        rollback_db(conn)
+                        close_db_connection(conn)
+                        flash('No selected question-bank questions were found.', 'warning')
+                        return redirect(url_for('manage_question_bank'))
+
+                    placeholders = ', '.join(['%s'] * len(existing_ids))
+                    cursor.execute(
+                        f"UPDATE question_bank SET {assignments} WHERE id IN ({placeholders})",
+                        tuple(list(updates.values()) + existing_ids),
+                    )
+                    updated_count = cursor.rowcount
+                    conn.commit()
+                    if updated_count == 0:
+                        flash('No selected question-bank questions were found.', 'warning')
+                    else:
+                        changed_fields = ', '.join(
+                            f'{column}="{value}"' for column, value in updates.items()
+                        )
+                        record_admin_audit(
+                            session['user_id'],
+                            'QUESTION_BANK_BULK_UPDATE',
+                            'question_bank',
+                            None,
+                            f'Updated {updated_count} reusable question(s): {changed_fields}; IDs {", ".join(str(i) for i in existing_ids)}',
+                        )
+                        flash(
+                            f'{updated_count} question(s) updated.',
+                            'success',
+                        )
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('bulk question-bank update')
+            finally:
+                close_db_connection(conn)
+
         elif action == 'delete':
             try:
                 bank_id = int(request.form.get('question_id'))
@@ -1013,6 +1172,8 @@ def manage_question_bank():
     difficulty_filter = request.args.get('difficulty', '').strip().lower()
     if difficulty_filter not in ('', 'easy', 'medium', 'hard'):
         difficulty_filter = ''
+    page = parse_positive_page(request.args.get('page'))
+    per_page = 20
 
     conn = get_db_connection()
     if not conn:
@@ -1021,6 +1182,8 @@ def manage_question_bank():
 
     questions = []
     categories = []
+    total_questions = 0
+    total_pages = 0
     try:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -1044,11 +1207,29 @@ def manage_question_bank():
                 clauses.append('difficulty = %s')
                 params.append(difficulty_filter)
 
-            query = 'SELECT * FROM question_bank'
+            where_sql = ''
             if clauses:
-                query += ' WHERE ' + ' AND '.join(clauses)
-            query += ' ORDER BY category ASC, difficulty ASC, created_at DESC, id DESC'
-            cursor.execute(query, tuple(params))
+                where_sql = ' WHERE ' + ' AND '.join(clauses)
+
+            cursor.execute(
+                'SELECT COUNT(*) AS count FROM question_bank' + where_sql,
+                tuple(params),
+            )
+            count_row = cursor.fetchone()
+            total_questions = int(count_row['count']) if count_row and count_row.get('count') is not None else 0
+            total_pages = (total_questions + per_page - 1) // per_page
+            if total_pages == 0:
+                page = 1
+            elif page > total_pages:
+                page = total_pages
+
+            offset = (page - 1) * per_page
+            query = (
+                'SELECT * FROM question_bank' + where_sql
+                + ' ORDER BY category ASC, difficulty ASC, created_at DESC, id DESC'
+                + ' LIMIT %s OFFSET %s'
+            )
+            cursor.execute(query, tuple(params + [per_page, offset]))
             questions = cursor.fetchall()
     except pymysql.MySQLError:
         flash_database_error('question-bank lookup')
@@ -1062,6 +1243,10 @@ def manage_question_bank():
         search=search,
         category_filter=category_filter,
         difficulty_filter=difficulty_filter,
+        page=page,
+        total_pages=total_pages,
+        total_questions=total_questions,
+        per_page=per_page,
     )
 
 
