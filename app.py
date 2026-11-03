@@ -145,6 +145,71 @@ def validate_question_payload(question_text=None, option_a=None, option_b=None,
     return True, normalized, None
 
 
+def validate_question_bank_payload(category=None, difficulty=None, **question_values):
+    valid, normalized, error = validate_question_payload(**question_values)
+    if not valid:
+        return False, normalized, error
+
+    normalized_category = str(category).strip() if category is not None else ''
+    normalized_difficulty = str(difficulty).strip().lower() if difficulty is not None else ''
+    normalized['category'] = normalized_category
+    normalized['difficulty'] = normalized_difficulty
+
+    if not normalized_category:
+        return False, normalized, 'Question category is required.'
+    if len(normalized_category) > 50:
+        return False, normalized, 'Category must be 50 characters or fewer.'
+    if normalized_difficulty not in ('easy', 'medium', 'hard'):
+        return False, normalized, 'Difficulty must be easy, medium, or hard.'
+
+    return True, normalized, None
+
+
+def copy_question_bank_to_quiz(cursor, quiz_id, bank_question_ids):
+    """Append bank-question snapshots to a quiz without linking completed history."""
+    normalized_ids = []
+    for raw_id in bank_question_ids:
+        try:
+            bank_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if bank_id > 0 and bank_id not in normalized_ids:
+            normalized_ids.append(bank_id)
+    if not normalized_ids:
+        return 0
+
+    placeholders = ', '.join(['%s'] * len(normalized_ids))
+    cursor.execute(
+        f"""
+        SELECT question_text, option_a, option_b, option_c, option_d, correct_option
+        FROM question_bank
+        WHERE id IN ({placeholders})
+        ORDER BY id ASC
+        """,
+        tuple(normalized_ids),
+    )
+    bank_questions = cursor.fetchall()
+
+    for question in bank_questions:
+        cursor.execute(
+            """
+            INSERT INTO questions
+                (quiz_id, question_text, option_a, option_b, option_c, option_d, correct_option)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                quiz_id,
+                question['question_text'],
+                question['option_a'],
+                question['option_b'],
+                question['option_c'],
+                question['option_d'],
+                question['correct_option'],
+            ),
+        )
+    return len(bank_questions)
+
+
 def normalize_schedule_datetime(value):
     if value is None:
         return None
@@ -724,6 +789,195 @@ def admin_audit_log():
     )
 
 
+@app.route('/admin/question-bank', methods=['GET', 'POST'])
+@limiter.limit('30 per minute', methods=['POST'])
+@admin_required
+def manage_question_bank():
+    if request.method == 'POST':
+        action = request.form.get('action')
+        conn = get_db_connection()
+        if not conn:
+            flash('Database connection failed. Please try again.', 'danger')
+            return redirect(url_for('manage_question_bank'))
+
+        if action in ('create', 'edit'):
+            valid, values, validation_error = validate_question_bank_payload(
+                category=request.form.get('category'),
+                difficulty=request.form.get('difficulty'),
+                question_text=request.form.get('question_text'),
+                option_a=request.form.get('option_a'),
+                option_b=request.form.get('option_b'),
+                option_c=request.form.get('option_c'),
+                option_d=request.form.get('option_d'),
+                correct_option=request.form.get('correct_option'),
+            )
+            if not valid:
+                close_db_connection(conn)
+                flash(validation_error, 'danger')
+                return redirect(url_for('manage_question_bank'))
+
+            try:
+                with conn.cursor() as cursor:
+                    if action == 'create':
+                        cursor.execute(
+                            """
+                            INSERT INTO question_bank
+                                (question_text, option_a, option_b, option_c, option_d,
+                                 correct_option, category, difficulty, created_by)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                values['question_text'], values['option_a'],
+                                values['option_b'], values['option_c'],
+                                values['option_d'], values['correct_option'],
+                                values['category'], values['difficulty'],
+                                session['user_id'],
+                            ),
+                        )
+                        bank_id = cursor.lastrowid
+                        audit_type = 'QUESTION_BANK_CREATE'
+                        details = (
+                            f'Created reusable question ID {bank_id} '
+                            f'in category "{values["category"]}"'
+                        )
+                        success_message = 'Question added to the question bank.'
+                    else:
+                        try:
+                            bank_id = int(request.form.get('question_id'))
+                        except (TypeError, ValueError):
+                            close_db_connection(conn)
+                            flash('Invalid question selection.', 'danger')
+                            return redirect(url_for('manage_question_bank'))
+                        cursor.execute(
+                            """
+                            UPDATE question_bank
+                            SET question_text=%s, option_a=%s, option_b=%s, option_c=%s,
+                                option_d=%s, correct_option=%s, category=%s, difficulty=%s
+                            WHERE id=%s
+                            """,
+                            (
+                                values['question_text'], values['option_a'],
+                                values['option_b'], values['option_c'],
+                                values['option_d'], values['correct_option'],
+                                values['category'], values['difficulty'], bank_id,
+                            ),
+                        )
+                        if cursor.rowcount == 0:
+                            rollback_db(conn)
+                            close_db_connection(conn)
+                            flash('Question-bank question not found.', 'danger')
+                            return redirect(url_for('manage_question_bank'))
+                        audit_type = 'QUESTION_BANK_UPDATE'
+                        details = f'Modified reusable question ID {bank_id}'
+                        success_message = 'Question-bank question updated.'
+
+                    conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        audit_type,
+                        'question_bank',
+                        bank_id,
+                        details,
+                    )
+                    flash(success_message, 'success')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question-bank operation')
+            finally:
+                close_db_connection(conn)
+
+        elif action == 'delete':
+            try:
+                bank_id = int(request.form.get('question_id'))
+            except (TypeError, ValueError):
+                close_db_connection(conn)
+                flash('Invalid question selection.', 'danger')
+                return redirect(url_for('manage_question_bank'))
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM question_bank WHERE id=%s", (bank_id,))
+                    if cursor.rowcount == 0:
+                        rollback_db(conn)
+                        close_db_connection(conn)
+                        flash('Question-bank question not found.', 'danger')
+                        return redirect(url_for('manage_question_bank'))
+                    conn.commit()
+                    record_admin_audit(
+                        session['user_id'],
+                        'QUESTION_BANK_DELETE',
+                        'question_bank',
+                        bank_id,
+                        f'Deleted reusable question ID {bank_id}',
+                    )
+                    flash('Question removed from the question bank.', 'info')
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question-bank deletion')
+            finally:
+                close_db_connection(conn)
+        else:
+            close_db_connection(conn)
+            flash('Invalid question-bank action.', 'danger')
+
+        return redirect(url_for('manage_question_bank'))
+
+    search = request.args.get('search', '').strip()
+    category_filter = request.args.get('category', '').strip()
+    difficulty_filter = request.args.get('difficulty', '').strip().lower()
+    if difficulty_filter not in ('', 'easy', 'medium', 'hard'):
+        difficulty_filter = ''
+
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    questions = []
+    categories = []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT category FROM question_bank ORDER BY category ASC"
+            )
+            categories = [row['category'] for row in cursor.fetchall()]
+
+            clauses = []
+            params = []
+            if search:
+                clauses.append(
+                    '(question_text LIKE %s OR option_a LIKE %s OR option_b LIKE %s '
+                    'OR option_c LIKE %s OR option_d LIKE %s)'
+                )
+                term = f'%{search}%'
+                params.extend([term, term, term, term, term])
+            if category_filter:
+                clauses.append('category = %s')
+                params.append(category_filter)
+            if difficulty_filter:
+                clauses.append('difficulty = %s')
+                params.append(difficulty_filter)
+
+            query = 'SELECT * FROM question_bank'
+            if clauses:
+                query += ' WHERE ' + ' AND '.join(clauses)
+            query += ' ORDER BY category ASC, difficulty ASC, created_at DESC, id DESC'
+            cursor.execute(query, tuple(params))
+            questions = cursor.fetchall()
+    except pymysql.MySQLError:
+        flash_database_error('question-bank lookup')
+    finally:
+        close_db_connection(conn)
+
+    return render_template(
+        'manage_question_bank.html',
+        questions=questions,
+        categories=categories,
+        search=search,
+        category_filter=category_filter,
+        difficulty_filter=difficulty_filter,
+    )
+
+
 @app.route('/admin/quizzes/<int:quiz_id>/duplicate', methods=['POST'])
 @limiter.limit('30 per minute', methods=['POST'])
 @admin_required
@@ -778,7 +1032,35 @@ def manage_quizzes():
         return redirect(url_for('admin_dashboard'))
     if request.method == 'POST':
         action = request.form.get('action')
-        
+
+        if action == 'add_from_bank':
+            try:
+                with conn.cursor() as cursor:
+                    copied_count = copy_question_bank_to_quiz(
+                        cursor,
+                        quiz_id,
+                        request.form.getlist('bank_question_ids'),
+                    )
+            except pymysql.MySQLError:
+                rollback_db(conn)
+                flash_database_error('question-bank import')
+                close_db_connection(conn)
+                return redirect(url_for('manage_questions', quiz_id=quiz_id))
+            conn.commit()
+            record_admin_audit(
+                session['user_id'],
+                'QUESTION_BANK_ADD_TO_QUIZ',
+                'quiz',
+                quiz_id,
+                f'Added {copied_count} question-bank question(s) to quiz ID {quiz_id}',
+            )
+            if copied_count:
+                flash(f'{copied_count} question(s) copied from the question bank.', 'success')
+            else:
+                flash('No valid question-bank questions were selected.', 'warning')
+            close_db_connection(conn)
+            return redirect(url_for('manage_questions', quiz_id=quiz_id))
+
         if action == 'create':
             title = request.form.get('title')
             category = request.form.get('category')
@@ -805,13 +1087,21 @@ def manage_quizzes():
                         (title, category, time_limit, description, session['user_id'], available_from, available_until)
                     )
                     quiz_id = cursor.lastrowid
+                    copied_count = copy_question_bank_to_quiz(
+                        cursor,
+                        quiz_id,
+                        request.form.getlist('bank_question_ids'),
+                    )
                     conn.commit()
                     record_admin_audit(
                         session['user_id'],
                         'QUIZ_CREATE',
                         'quiz',
                         quiz_id,
-                        f'Created quiz "{title}"',
+                        (
+                            f'Created quiz "{title}"'
+                            + (f' with {copied_count} question-bank question(s)' if copied_count else '')
+                        ),
                     )
                     flash('Quiz created successfully!', 'success')
             except pymysql.MySQLError:
@@ -849,13 +1139,21 @@ def manage_quizzes():
                         """,
                         (title, category, time_limit, description, available_from, available_until, quiz_id),
                     )
+                    copied_count = copy_question_bank_to_quiz(
+                        cursor,
+                        int(quiz_id),
+                        request.form.getlist('bank_question_ids'),
+                    )
                     conn.commit()
                     record_admin_audit(
                         session['user_id'],
                         'QUIZ_UPDATE',
                         'quiz',
                         int(quiz_id),
-                        f'Modified quiz "{title}"',
+                        (
+                            f'Modified quiz "{title}"'
+                            + (f'; appended {copied_count} question-bank question(s)' if copied_count else '')
+                        ),
                     )
                     flash('Quiz updated successfully!', 'success')
             except (pymysql.MySQLError, ValueError, TypeError):
@@ -891,6 +1189,7 @@ def manage_quizzes():
 
     quizzes = []
     categories = []
+    question_bank = []
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT * FROM quizzes ORDER BY created_at DESC")
@@ -898,10 +1197,23 @@ def manage_quizzes():
             
             cursor.execute("SELECT DISTINCT category FROM quizzes")
             categories = [row['category'] for row in cursor.fetchall()]
+            cursor.execute(
+                """
+                SELECT id, question_text, category, difficulty
+                FROM question_bank
+                ORDER BY category ASC, difficulty ASC, id ASC
+                """
+            )
+            question_bank = cursor.fetchall()
     finally:
         conn.close()
 
-    return render_template('manage_quizzes.html', quizzes=quizzes, categories=categories)
+    return render_template(
+        'manage_quizzes.html',
+        quizzes=quizzes,
+        categories=categories,
+        question_bank=question_bank,
+    )
 
 @app.route('/admin/results/export')
 @app.route('/admin/quizzes/<int:quiz_id>/export')
@@ -1177,14 +1489,28 @@ def manage_questions(quiz_id):
         return redirect(url_for('manage_questions', quiz_id=quiz_id))
 
     questions = []
+    question_bank = []
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT * FROM questions WHERE quiz_id = %s", (quiz_id,))
             questions = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT id, question_text, category, difficulty
+                FROM question_bank
+                ORDER BY category ASC, difficulty ASC, id ASC
+                """
+            )
+            question_bank = cursor.fetchall()
     finally:
         conn.close()
 
-    return render_template('manage_questions.html', quiz=quiz, questions=questions)
+    return render_template(
+        'manage_questions.html',
+        quiz=quiz,
+        questions=questions,
+        question_bank=question_bank,
+    )
 
 @app.route('/admin/students')
 @admin_required
