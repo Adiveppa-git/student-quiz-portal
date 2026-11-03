@@ -110,6 +110,41 @@ def validate_quiz_schedule(start_value=None, end_value=None):
     return True, start, end, None
 
 
+def validate_question_payload(question_text=None, option_a=None, option_b=None,
+                              option_c=None, option_d=None, correct_option=None):
+    """Normalize and validate question data against the existing questions schema."""
+    normalized = {
+        'question_text': str(question_text).strip() if question_text is not None else '',
+        'option_a': str(option_a).strip() if option_a is not None else '',
+        'option_b': str(option_b).strip() if option_b is not None else '',
+        'option_c': str(option_c).strip() if option_c is not None else '',
+        'option_d': str(option_d).strip() if option_d is not None else '',
+        'correct_option': str(correct_option).strip().upper() if correct_option is not None else '',
+    }
+
+    if not normalized['question_text']:
+        return False, normalized, 'Question text is required.'
+    if len(normalized['question_text']) > 5000:
+        return False, normalized, 'Question text must be 5000 characters or fewer.'
+
+    option_names = ('option_a', 'option_b', 'option_c', 'option_d')
+    for option_name in option_names:
+        value = normalized[option_name]
+        if not value:
+            return False, normalized, 'All four options are required.'
+        if len(value) > 255:
+            return False, normalized, 'Each option must be 255 characters or fewer.'
+
+    option_values = [normalized[name].casefold() for name in option_names]
+    if len(set(option_values)) != 4:
+        return False, normalized, 'The four options must be different.'
+
+    if normalized['correct_option'] not in ('A', 'B', 'C', 'D'):
+        return False, normalized, 'Correct answer must be option A, B, C, or D.'
+
+    return True, normalized, None
+
+
 def normalize_schedule_datetime(value):
     if value is None:
         return None
@@ -1009,18 +1044,32 @@ def manage_questions(quiz_id):
         action = request.form.get('action')
         
         if action == 'create':
-            q_text = request.form.get('question_text')
-            opt_a = request.form.get('option_a')
-            opt_b = request.form.get('option_b')
-            opt_c = request.form.get('option_c')
-            opt_d = request.form.get('option_d')
-            correct = request.form.get('correct_option')
-            
+            valid, values, validation_error = validate_question_payload(
+                request.form.get('question_text'),
+                request.form.get('option_a'),
+                request.form.get('option_b'),
+                request.form.get('option_c'),
+                request.form.get('option_d'),
+                request.form.get('correct_option'),
+            )
+            if not valid:
+                close_db_connection(conn)
+                flash(validation_error, 'danger')
+                return redirect(url_for('manage_questions', quiz_id=quiz_id))
+
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         "INSERT INTO questions (quiz_id, question_text, option_a, option_b, option_c, option_d, correct_option) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (quiz_id, q_text, opt_a, opt_b, opt_c, opt_d, correct)
+                        (
+                            quiz_id,
+                            values['question_text'],
+                            values['option_a'],
+                            values['option_b'],
+                            values['option_c'],
+                            values['option_d'],
+                            values['correct_option'],
+                        )
                     )
                     question_id = cursor.lastrowid
                     conn.commit()
@@ -1044,12 +1093,18 @@ def manage_questions(quiz_id):
                 close_db_connection(conn)
                 flash('Invalid question selection.', 'danger')
                 return redirect(url_for('manage_questions', quiz_id=quiz_id))
-            q_text = request.form.get('question_text')
-            opt_a = request.form.get('option_a')
-            opt_b = request.form.get('option_b')
-            opt_c = request.form.get('option_c')
-            opt_d = request.form.get('option_d')
-            correct = request.form.get('correct_option')
+            valid, values, validation_error = validate_question_payload(
+                request.form.get('question_text'),
+                request.form.get('option_a'),
+                request.form.get('option_b'),
+                request.form.get('option_c'),
+                request.form.get('option_d'),
+                request.form.get('correct_option'),
+            )
+            if not valid:
+                close_db_connection(conn)
+                flash(validation_error, 'danger')
+                return redirect(url_for('manage_questions', quiz_id=quiz_id))
             
             try:
                 with conn.cursor() as cursor:
@@ -1057,7 +1112,21 @@ def manage_questions(quiz_id):
                         UPDATE questions 
                         SET question_text=%s, option_a=%s, option_b=%s, option_c=%s, option_d=%s, correct_option=%s
                         WHERE id=%s AND quiz_id=%s
-                    """, (q_text, opt_a, opt_b, opt_c, opt_d, correct, q_id, quiz_id))
+                    """, (
+                        values['question_text'],
+                        values['option_a'],
+                        values['option_b'],
+                        values['option_c'],
+                        values['option_d'],
+                        values['correct_option'],
+                        question_entity_id,
+                        quiz_id,
+                    ))
+                    if cursor.rowcount == 0:
+                        rollback_db(conn)
+                        close_db_connection(conn)
+                        flash('Question not found in this quiz.', 'danger')
+                        return redirect(url_for('manage_questions', quiz_id=quiz_id))
                     conn.commit()
                     record_admin_audit(
                         session['user_id'],
@@ -1082,6 +1151,11 @@ def manage_questions(quiz_id):
             try:
                 with conn.cursor() as cursor:
                     cursor.execute("DELETE FROM questions WHERE id = %s AND quiz_id = %s", (q_id, quiz_id))
+                    if cursor.rowcount == 0:
+                        rollback_db(conn)
+                        close_db_connection(conn)
+                        flash('Question not found in this quiz.', 'danger')
+                        return redirect(url_for('manage_questions', quiz_id=quiz_id))
                     conn.commit()
                     record_admin_audit(
                         session['user_id'],
@@ -1094,7 +1168,12 @@ def manage_questions(quiz_id):
             except (pymysql.MySQLError, ValueError, TypeError):
                 rollback_db(conn)
                 flash_database_error('question deletion')
-                
+        else:
+            close_db_connection(conn)
+            flash('Invalid question action.', 'danger')
+            return redirect(url_for('manage_questions', quiz_id=quiz_id))
+
+        close_db_connection(conn)
         return redirect(url_for('manage_questions', quiz_id=quiz_id))
 
     questions = []

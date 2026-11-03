@@ -30,26 +30,26 @@
                     
                     <div class="mb-3">
                         <label for="question_text" class="form-label">Question Text</label>
-                        <textarea class="form-control bg-light" id="question_text" name="question_text" rows="3" required placeholder="What is the output of..."></textarea>
+                        <textarea class="form-control bg-light" id="question_text" name="question_text" rows="3" maxlength="5000" required placeholder="What is the output of..."></textarea>
                     </div>
                     
                     <div class="mb-3">
                         <label class="form-label text-muted small text-uppercase fw-bold mb-2">Options</label>
                         <div class="input-group mb-2 shadow-sm">
                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">A</span>
-                            <input type="text" class="form-control border-start-0 ps-0" name="option_a" required>
+                            <input type="text" class="form-control border-start-0 ps-0" name="option_a" maxlength="255" required>
                         </div>
                         <div class="input-group mb-2 shadow-sm">
                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">B</span>
-                            <input type="text" class="form-control border-start-0 ps-0" name="option_b" required>
+                            <input type="text" class="form-control border-start-0 ps-0" name="option_b" maxlength="255" required>
                         </div>
                         <div class="input-group mb-2 shadow-sm">
                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">C</span>
-                            <input type="text" class="form-control border-start-0 ps-0" name="option_c" required>
+                            <input type="text" class="form-control border-start-0 ps-0" name="option_c" maxlength="255" required>
                         </div>
                         <div class="input-group mb-4 shadow-sm">
                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">D</span>
-                            <input type="text" class="form-control border-start-0 ps-0" name="option_d" required>
+                            <input type="text" class="form-control border-start-0 ps-0" name="option_d" maxlength="255" required>
                         </div>
                     </div>
                     
@@ -148,7 +148,7 @@
                                             
                                             <div class="mb-4">
                                                 <label class="form-label text-start d-block fw-bold text-muted small text-uppercase">Question Text</label>
-                                                <textarea class="form-control bg-light border-0" name="question_text" rows="3" required>{{ question.question_text }}</textarea>
+                                                <textarea class="form-control bg-light border-0" name="question_text" rows="3" maxlength="5000" required>{{ question.question_text }}</textarea>
                                             </div>
                                             
                                             <div class="mb-4">
@@ -157,25 +157,25 @@
                                                     <div class="col-md-6">
                                                         <div class="input-group shadow-sm">
                                                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">A</span>
-                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_a" value="{{ question.option_a }}" required>
+                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_a" value="{{ question.option_a }}" maxlength="255" required>
                                                         </div>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <div class="input-group shadow-sm">
                                                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">B</span>
-                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_b" value="{{ question.option_b }}" required>
+                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_b" value="{{ question.option_b }}" maxlength="255" required>
                                                         </div>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <div class="input-group shadow-sm">
                                                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">C</span>
-                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_c" value="{{ question.option_c }}" required>
+                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_c" value="{{ question.option_c }}" maxlength="255" required>
                                                         </div>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <div class="input-group shadow-sm">
                                                             <span class="input-group-text bg-white border-end-0 fw-bold text-primary">D</span>
-                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_d" value="{{ question.option_d }}" required>
+                                                            <input type="text" class="form-control border-start-0 ps-0" name="option_d" value="{{ question.option_d }}" maxlength="255" required>
                                                         </div>
                                                     </div>
                                                 </div>
