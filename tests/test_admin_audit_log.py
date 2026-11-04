@@ -120,6 +120,37 @@ class AdminAuditLogTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('No administrative activity has been recorded.', response.get_data(as_text=True))
 
+    def test_audit_history_database_error_is_generic_and_safe(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.execute.side_effect = app.pymysql.err.OperationalError(
+            1146,
+            "Table 'student_quiz_portal.admin_audit_logs' doesn't exist",
+        )
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection), \
+             patch.object(app.app.logger, 'exception'):
+            response = self.client.get('/admin/audit-log')
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('The database could not complete your request. Please try again.', body)
+        self.assertNotIn('admin_audit_logs', body)
+        self.assertNotIn("doesn't exist", body)
+
+    def test_audit_history_connection_failure_is_handled_without_details(self):
+        self.set_session('admin', 1)
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=None):
+            response = self.client.get('/admin/audit-log')
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('The database could not complete your request. Please try again.', body)
+        self.assertIn('No administrative activity has been recorded.', body)
+
     def test_audit_schema_migration_and_database_include_required_fields(self):
         root = Path(app.app.root_path)
         schema = root.joinpath('database.sql').read_text(encoding='utf-8')

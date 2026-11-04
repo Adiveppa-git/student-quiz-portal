@@ -868,6 +868,8 @@ def admin_audit_log():
             flash_database_error('audit log lookup')
         finally:
             close_db_connection(conn)
+    else:
+        flash('The database could not complete your request. Please try again.', 'danger')
 
     total_pages = max(1, (total_logs + per_page - 1) // per_page)
     if page > total_pages:
