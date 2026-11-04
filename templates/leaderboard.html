@@ -3,94 +3,137 @@
 {% block content %}
 <div class="row mb-4 align-items-center">
     <div class="col-md-8">
-        <h2 class="fw-bold mb-1"><i class="fas fa-trophy me-2 text-warning"></i> Global Leaderboard</h2>
-        <p class="text-muted mb-0">Top performing students ranked by total points scored.</p>
+        <h2 class="fw-bold mb-1"><i class="fas fa-trophy me-2 text-warning"></i> Student Leaderboard</h2>
+        <p class="text-muted mb-0">
+            {% if selected_quiz %}
+                Rankings for {{ selected_quiz.title }}
+            {% else %}
+                Overall student rankings
+            {% endif %}
+        </p>
     </div>
     <div class="col-md-4 text-md-end mt-3 mt-md-0">
-        <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-secondary rounded-pill px-4"><i class="fas fa-arrow-left me-1"></i> Dashboard</a>
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-secondary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Dashboard
+        </a>
     </div>
 </div>
 
-<div class="row justify-content-center">
-    <div class="col-md-10">
-        <div class="card border-0 shadow-lg overflow-hidden">
-            <div class="card-header bg-white py-4 text-center border-bottom" style="border-bottom-width: 3px !important; border-bottom-color: var(--warning-color) !important;">
-                <h4 class="mb-0 text-dark fw-bold"><i class="fas fa-crown me-2 text-warning"></i> Hall of Fame</h4>
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="get" action="{{ url_for('leaderboard') }}" class="row g-3 align-items-end">
+            <div class="col-md-8">
+                <label for="leaderboard-quiz" class="form-label fw-semibold">Quiz leaderboard</label>
+                <select id="leaderboard-quiz" name="quiz_id" class="form-select">
+                    <option value="">Overall leaderboard</option>
+                    {% for quiz in quizzes %}
+                        <option value="{{ quiz.id }}" {% if quiz_id == quiz.id %}selected{% endif %}>{{ quiz.title }}</option>
+                    {% endfor %}
+                </select>
             </div>
-            <div class="card-body p-0">
-                <div class="table-responsive">
-                    <table class="table table-hover table-borderless align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th class="text-center" style="width: 15%;">Rank</th>
-                                <th>Student</th>
-                                <th class="text-center">Total Points</th>
-                                <th class="text-center pe-4">Accuracy</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% if leaders %}
-                                {% for leader in leaders %}
-                                    {% set accuracy = 0 %}
-                                    {% if leader.total_possible and leader.total_possible > 0 %}
-                                        {% set accuracy = (leader.total_score / leader.total_possible * 100) | round(1) %}
+            <div class="col-md-4 d-grid">
+                <button type="submit" class="btn btn-primary rounded-pill">View Rankings</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="alert alert-light border shadow-sm mb-4" role="note">
+    <i class="fas fa-info-circle me-2 text-primary"></i>
+    Rankings use the average percentage across valid completed results.
+    {% if selected_quiz %}
+        This view uses one completed result per student for the selected quiz.
+    {% else %}
+        Equal averages are ordered by completed quizzes, then total score, then username.
+    {% endif %}
+    Results with zero total questions are excluded.
+</div>
+
+{% if current_student %}
+<div class="card border-0 shadow-sm mb-4 border-start border-primary border-4">
+    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+            <span class="badge bg-primary rounded-pill mb-2">Your Rank</span>
+            <h4 class="mb-0 fw-bold">#{{ current_student.rank }} &nbsp; {{ current_student.username }}</h4>
+        </div>
+        <div class="text-md-end">
+            <span class="fw-bold text-primary fs-5">{{ current_student.average_score | round(1) }}%</span>
+            {% if not selected_quiz %}
+                <span class="text-muted d-block">{{ current_student.completed_quizzes }} completed quiz{{ 'zes' if current_student.completed_quizzes != 1 else '' }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card border-0 shadow-lg overflow-hidden">
+    <div class="card-header bg-white py-4 text-center border-bottom border-warning border-3">
+        <h4 class="mb-0 text-dark fw-bold"><i class="fas fa-crown me-2 text-warning"></i> Hall of Fame</h4>
+        <p class="text-muted small mb-0 mt-2">Top 10 students</p>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-borderless align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="text-center">Rank</th>
+                        <th>Student</th>
+                        {% if not selected_quiz %}
+                            <th class="text-center">Completed</th>
+                        {% endif %}
+                        <th class="text-center">Average Score</th>
+                        <th class="text-center pe-4">Total Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if leaders %}
+                        {% for leader in leaders %}
+                            {% set is_current = leader.student_id == session.user_id %}
+                            <tr class="{% if is_current %}table-primary border-start border-primary border-4{% elif leader.rank == 1 %}bg-warning bg-opacity-10 border-start border-warning border-4{% elif leader.rank == 2 %}bg-secondary bg-opacity-10 border-start border-secondary border-4{% elif leader.rank == 3 %}bg-danger bg-opacity-10 border-start border-danger border-4{% endif %}">
+                                <td class="text-center">
+                                    {% if leader.rank == 1 %}
+                                        <div class="d-inline-block p-2 bg-warning bg-opacity-25 rounded-circle"><i class="fas fa-medal fa-2x text-warning"></i></div>
+                                    {% elif leader.rank == 2 %}
+                                        <div class="d-inline-block p-2 bg-secondary bg-opacity-25 rounded-circle"><i class="fas fa-medal fa-2x text-secondary"></i></div>
+                                    {% elif leader.rank == 3 %}
+                                        <div class="d-inline-block p-2 bg-danger bg-opacity-25 rounded-circle"><i class="fas fa-medal fa-2x text-danger"></i></div>
+                                    {% else %}
+                                        <span class="fs-5 fw-bold text-muted">#{{ leader.rank }}</span>
                                     {% endif %}
-                                    
-                                    <tr class="{% if loop.index == 1 %}bg-warning bg-opacity-10 border-start border-warning border-4{% elif loop.index == 2 %}bg-secondary bg-opacity-10 border-start border-secondary border-4{% elif loop.index == 3 %}bg-danger bg-opacity-10 border-start border-danger border-4{% endif %}" style="{% if loop.index <= 3 %}transform: scale(1); box-shadow: inset 0 0 10px rgba(0,0,0,0.02);{% endif %}">
-                                        <td class="text-center">
-                                            {% if loop.index == 1 %}
-                                                <div class="d-inline-block p-2 bg-warning bg-opacity-25 rounded-circle">
-                                                    <i class="fas fa-medal fa-2x text-warning"></i>
-                                                </div>
-                                            {% elif loop.index == 2 %}
-                                                <div class="d-inline-block p-2 bg-secondary bg-opacity-25 rounded-circle">
-                                                    <i class="fas fa-medal fa-2x text-secondary"></i>
-                                                </div>
-                                            {% elif loop.index == 3 %}
-                                                <div class="d-inline-block p-2 bg-danger bg-opacity-25 rounded-circle">
-                                                    <i class="fas fa-medal fa-2x text-danger"></i>
-                                                </div>
-                                            {% else %}
-                                                <span class="fs-5 fw-bold text-muted">#{{ loop.index }}</span>
-                                            {% endif %}
-                                        </td>
-                                        <td>
-                                            <div class="d-flex align-items-center py-2">
-                                                <div class="bg-primary rounded-circle d-flex justify-content-center align-items-center me-3 shadow-sm" style="width: 45px; height: 45px; background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;">
-                                                    <span class="fw-bold text-white fs-5">{{ leader.username[0]|upper }}</span>
-                                                </div>
-                                                <span class="fs-5 fw-bold text-dark">{{ leader.username }}</span>
-                                            </div>
-                                        </td>
-                                        <td class="text-center">
-                                            <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill shadow-sm">{{ leader.total_score }}</span>
-                                        </td>
-                                        <td class="text-center pe-4">
-                                            {% if accuracy >= 80 %}
-                                                <span class="text-success fw-bold bg-success bg-opacity-10 px-3 py-1 rounded-pill"><i class="fas fa-arrow-up me-1"></i>{{ accuracy }}%</span>
-                                            {% elif accuracy >= 50 %}
-                                                <span class="text-primary fw-bold bg-primary bg-opacity-10 px-3 py-1 rounded-pill">{{ accuracy }}%</span>
-                                            {% else %}
-                                                <span class="text-danger fw-bold bg-danger bg-opacity-10 px-3 py-1 rounded-pill"><i class="fas fa-arrow-down me-1"></i>{{ accuracy }}%</span>
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                {% endfor %}
-                            {% else %}
-                                <tr>
-                                    <td colspan="4" class="text-center py-5">
-                                        <div class="text-muted">
-                                            <i class="fas fa-chart-line fa-3x mb-3 text-light"></i>
-                                            <h5 class="text-dark">No scores yet</h5>
-                                            <p class="mb-0">Start playing quizzes to get on the board!</p>
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center py-2">
+                                        <div class="bg-primary rounded-circle d-flex justify-content-center align-items-center me-3 shadow-sm" style="width:45px;height:45px;background:linear-gradient(135deg,var(--primary-color),var(--secondary-color)) !important;">
+                                            <span class="fw-bold text-white fs-5">{{ leader.username[0]|upper }}</span>
                                         </div>
-                                    </td>
-                                </tr>
-                            {% endif %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+                                        <span class="fs-5 fw-bold text-dark">{{ leader.username }}</span>
+                                        {% if is_current %}<span class="badge bg-primary ms-2">You</span>{% endif %}
+                                    </div>
+                                </td>
+                                {% if not selected_quiz %}
+                                    <td class="text-center">{{ leader.completed_quizzes }}</td>
+                                {% endif %}
+                                <td class="text-center">
+                                    <span class="fw-bold text-primary">{{ leader.average_score | round(1) }}%</span>
+                                </td>
+                                <td class="text-center pe-4">
+                                    <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill">{{ leader.total_score }}</span>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="{{ 5 if not selected_quiz else 4 }}" class="text-center py-5">
+                                <div class="text-muted">
+                                    <i class="fas fa-chart-line fa-3x mb-3 text-light"></i>
+                                    <h5 class="text-dark">No completed quiz attempts yet</h5>
+                                    <p class="mb-0">Complete a quiz with at least one question to appear on the leaderboard.</p>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
         </div>
     </div>
 </div>

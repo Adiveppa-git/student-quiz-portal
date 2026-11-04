@@ -2431,22 +2431,173 @@ def leaderboard():
     if not conn:
         flash('Database connection failed. Please try again.', 'danger')
         return redirect(url_for('student_dashboard'))
+
+    quizzes = []
     leaders = []
+    current_student = None
+    selected_quiz = None
+    selected_quiz_id = request.args.get('quiz_id', '').strip()
+    quiz_filter = None
+
     try:
         with conn.cursor() as cursor:
-            cursor.execute('''
-                SELECT u.username, SUM(r.score) as total_score, SUM(r.total_questions) as total_possible
-                FROM users u
-                JOIN results r ON u.id = r.user_id
-                WHERE u.role = 'student'
-                GROUP BY u.id
-                ORDER BY total_score DESC
-                LIMIT 10
-            ''')
+            cursor.execute(
+                "SELECT id, title FROM quizzes ORDER BY title ASC, id ASC"
+            )
+            quizzes = cursor.fetchall()
+
+            if selected_quiz_id:
+                try:
+                    quiz_filter = int(selected_quiz_id)
+                    if quiz_filter <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    quiz_filter = None
+                    flash('Invalid quiz selection.', 'warning')
+
+                if quiz_filter is not None:
+                    cursor.execute(
+                        "SELECT id, title FROM quizzes WHERE id = %s",
+                        (quiz_filter,),
+                    )
+                    selected_quiz = cursor.fetchone()
+                    if not selected_quiz:
+                        quiz_filter = None
+                        flash('Invalid quiz selection.', 'warning')
+
+            if quiz_filter is None:
+                cursor.execute("""
+                    SELECT u.id AS student_id,
+                           u.username,
+                           COUNT(r.id) AS completed_quizzes,
+                           AVG(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS average_score,
+                           SUM(r.score) AS total_score,
+                           SUM(r.total_questions) AS total_possible
+                    FROM users u
+                    JOIN results r ON r.user_id = u.id
+                    WHERE u.role = 'student' AND r.total_questions > 0
+                    GROUP BY u.id, u.username
+                    ORDER BY average_score DESC, completed_quizzes DESC,
+                             total_score DESC, u.username ASC
+                    LIMIT 10
+                """)
+            else:
+                cursor.execute("""
+                    SELECT u.id AS student_id,
+                           u.username,
+                           1 AS completed_quizzes,
+                           r.score * 100.0 / NULLIF(r.total_questions, 0) AS average_score,
+                           r.score AS total_score,
+                           r.total_questions AS total_possible,
+                           r.date_taken
+                    FROM results r
+                    JOIN users u ON u.id = r.user_id
+                    JOIN quizzes q ON q.id = r.quiz_id
+                    WHERE u.role = 'student'
+                      AND r.quiz_id = %s
+                      AND r.total_questions > 0
+                    ORDER BY average_score DESC, r.score DESC,
+                             u.username ASC, r.id ASC
+                    LIMIT 10
+                """, (quiz_filter,))
             leaders = cursor.fetchall()
+
+            if leaders:
+                previous_key = None
+                rank = 0
+                for index, leader in enumerate(leaders, start=1):
+                    if quiz_filter is None:
+                        key = (
+                            round(float(leader['average_score'] or 0), 10),
+                            leader['completed_quizzes'],
+                            leader['total_score'],
+                        )
+                    else:
+                        key = (
+                            round(float(leader['average_score'] or 0), 10),
+                            leader['total_score'],
+                        )
+                    if key != previous_key:
+                        rank = index
+                        previous_key = key
+                    leader['rank'] = rank
+
+            current_student_id = session['user_id']
+            if leaders and not any(leader['student_id'] == current_student_id for leader in leaders):
+                if quiz_filter is None:
+                    cursor.execute("""
+                        SELECT u.id AS student_id,
+                               u.username,
+                               COUNT(r.id) AS completed_quizzes,
+                               AVG(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS average_score,
+                               SUM(r.score) AS total_score,
+                               SUM(r.total_questions) AS total_possible
+                        FROM users u
+                        JOIN results r ON r.user_id = u.id
+                        WHERE u.role = 'student' AND r.total_questions > 0
+                        GROUP BY u.id, u.username
+                        ORDER BY average_score DESC, completed_quizzes DESC,
+                                 total_score DESC, u.username ASC
+                    """)
+                else:
+                    cursor.execute("""
+                        SELECT u.id AS student_id,
+                               u.username,
+                               1 AS completed_quizzes,
+                               r.score * 100.0 / NULLIF(r.total_questions, 0) AS average_score,
+                               r.score AS total_score,
+                               r.total_questions AS total_possible,
+                               r.date_taken
+                        FROM results r
+                        JOIN users u ON u.id = r.user_id
+                        WHERE u.role = 'student'
+                          AND r.quiz_id = %s
+                          AND r.total_questions > 0
+                        ORDER BY average_score DESC, r.score DESC,
+                                 u.username ASC, r.id ASC
+                    """, (quiz_filter,))
+
+                all_ranked = cursor.fetchall()
+                previous_key = None
+                rank = 0
+                for index, row in enumerate(all_ranked, start=1):
+                    if quiz_filter is None:
+                        key = (
+                            round(float(row['average_score'] or 0), 10),
+                            row['completed_quizzes'],
+                            row['total_score'],
+                        )
+                    else:
+                        key = (
+                            round(float(row['average_score'] or 0), 10),
+                            row['total_score'],
+                        )
+                    if key != previous_key:
+                        rank = index
+                        previous_key = key
+                    if row['student_id'] == current_student_id:
+                        row['rank'] = rank
+                        current_student = row
+                        break
+            else:
+                for leader in leaders:
+                    if leader['student_id'] == current_student_id:
+                        current_student = leader
+                        break
+    except pymysql.MySQLError:
+        flash_database_error('student leaderboard')
+        leaders = []
+        current_student = None
     finally:
         conn.close()
-    return render_template('leaderboard.html', leaders=leaders)
+    return render_template(
+        'leaderboard.html',
+        leaders=leaders,
+        quizzes=quizzes,
+        selected_quiz=selected_quiz,
+        quiz_id=quiz_filter,
+        current_student=current_student,
+    )
 
 if __name__ == "__main__":
     debug_enabled = os.getenv('FLASK_DEBUG', '0') == '1'
