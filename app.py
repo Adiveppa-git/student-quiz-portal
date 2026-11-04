@@ -165,6 +165,85 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+def calculate_learning_progress(results):
+    """Build summary and trend data only from valid completed result rows."""
+    valid_results = []
+    for result in results or []:
+        try:
+            score = int(result.get('score'))
+            total_questions = int(result.get('total_questions'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if total_questions <= 0 or score < 0:
+            continue
+
+        normalized = dict(result)
+        normalized['percentage'] = round(score * 100.0 / total_questions, 1)
+        valid_results.append(normalized)
+
+    def progress_sort_key(item):
+        date_taken = item.get('date_taken')
+        if isinstance(date_taken, datetime):
+            return date_taken
+        if date_taken:
+            for date_format in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                try:
+                    return datetime.strptime(str(date_taken), date_format)
+                except ValueError:
+                    continue
+        return datetime.min
+
+    chronological = sorted(valid_results, key=progress_sort_key)
+    recent_history = list(reversed(chronological))
+    percentages = [item['percentage'] for item in chronological]
+
+    trend_status = 'Not enough data'
+    trend_difference = 0.0
+    if len(percentages) >= 2:
+        split = max(1, len(percentages) // 2)
+        previous_values = percentages[:split]
+        recent_values = percentages[split:]
+        previous = sum(previous_values) / len(previous_values)
+        recent = sum(recent_values) / len(recent_values)
+        trend_difference = round(recent - previous, 1)
+        if trend_difference > 2.0:
+            trend_status = 'Improving'
+        elif trend_difference < -2.0:
+            trend_status = 'Declining'
+        else:
+            trend_status = 'Stable'
+
+    if not valid_results:
+        summary = {
+            'completed_quizzes': 0,
+            'average_score': None,
+            'highest_score': None,
+        }
+    else:
+        summary = {
+            'completed_quizzes': len(valid_results),
+            'average_score': round(sum(percentages) / len(percentages), 1),
+            'highest_score': round(max(percentages), 1),
+        }
+
+    chart_points = []
+    if percentages:
+        for index, percentage in enumerate(percentages):
+            x = 40 if len(percentages) == 1 else 40 + index * 600 / (len(percentages) - 1)
+            y = 240 - max(0, min(100, percentage)) * 2
+            chart_points.append({'x': round(x, 1), 'y': round(y, 1), 'percentage': percentage})
+
+    return {
+        'summary': summary,
+        'chronological': chronological,
+        'history': recent_history,
+        'trend_status': trend_status,
+        'trend_difference': trend_difference,
+        'trend_difference_absolute': round(abs(trend_difference), 1),
+        'chart_points': chart_points,
+    }
+
+
 ACHIEVEMENT_DEFINITIONS = (
     {
         'key': 'first_steps',
@@ -2614,6 +2693,41 @@ def student_history():
         results=results,
         performance=performance,
     )
+
+@app.route('/student/progress')
+@student_required
+def student_progress():
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return render_template(
+            'progress.html',
+            progress=calculate_learning_progress([]),
+        )
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT r.quiz_id, r.score, r.total_questions, r.date_taken, q.title, q.category
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                WHERE r.user_id = %s
+                  AND r.total_questions > 0
+                  AND r.score >= 0
+                ORDER BY r.date_taken ASC, r.id ASC
+                ''',
+                (session['user_id'],),
+            )
+            progress = calculate_learning_progress(cursor.fetchall())
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('student learning progress')
+        progress = calculate_learning_progress([])
+    finally:
+        close_db_connection(conn)
+
+    return render_template('progress.html', progress=progress)
 
 @app.route('/student/achievements')
 @student_required

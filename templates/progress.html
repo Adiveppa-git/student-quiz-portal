@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h2 class="fw-bold mb-1"><i class="fas fa-chart-line me-2 text-info"></i> Learning Progress</h2>
+        <p class="text-muted mb-0">See your quiz performance trends and score history.</p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-primary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Dashboard
+        </a>
+    </div>
+</div>
+
+{% set summary = progress.summary %}
+{% if summary.completed_quizzes %}
+<div class="row g-4 mb-5">
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-clipboard-check stat-icon text-primary"></i>
+                <div class="stat-value">{{ summary.completed_quizzes }}</div>
+                <div class="stat-label">Completed Quizzes</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-percentage stat-icon text-success"></i>
+                <div class="stat-value">{{ summary.average_score }}%</div>
+                <div class="stat-label">Average Score</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-trophy stat-icon text-warning"></i>
+                <div class="stat-value">{{ summary.highest_score }}%</div>
+                <div class="stat-label">Highest Score</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mb-5">
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-chart-area me-2 text-primary"></i> Performance Trend</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <svg viewBox="0 0 680 260" role="img" aria-label="Quiz score performance trend" class="w-100" style="min-height:260px;">
+                        <line x1="40" y1="40" x2="640" y2="40" stroke="#e9ecef" stroke-width="1"/>
+                        <line x1="40" y1="140" x2="640" y2="140" stroke="#e9ecef" stroke-width="1"/>
+                        <line x1="40" y1="240" x2="640" y2="240" stroke="#e9ecef" stroke-width="1"/>
+                        <text x="6" y="44" fill="#6c757d" font-size="12">100%</text>
+                        <text x="12" y="144" fill="#6c757d" font-size="12">50%</text>
+                        <text x="18" y="244" fill="#6c757d" font-size="12">0%</text>
+                        <polyline
+                            fill="none"
+                            stroke="#4f46e5"
+                            stroke-width="4"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            points="{% for point in progress.chart_points %}{{ point.x }},{{ point.y }} {% endfor %}"/>
+                        {% for point in progress.chart_points %}
+                            <circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" fill="#4f46e5" stroke="#fff" stroke-width="2">
+                                <title>{{ point.percentage }}%</title>
+                            </circle>
+                        {% endfor %}
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-arrow-trend-up me-2 text-success"></i> Recent Performance</h5>
+            </div>
+            <div class="card-body text-center d-flex flex-column justify-content-center py-5">
+                {% if progress.trend_status == 'Improving' %}
+                    <i class="fas fa-arrow-up fa-3x text-success mb-3"></i>
+                    <h4 class="fw-bold text-success">Improving</h4>
+                {% elif progress.trend_status == 'Declining' %}
+                    <i class="fas fa-arrow-down fa-3x text-danger mb-3"></i>
+                    <h4 class="fw-bold text-danger">Declining</h4>
+                {% elif progress.trend_status == 'Stable' %}
+                    <i class="fas fa-minus fa-3x text-primary mb-3"></i>
+                    <h4 class="fw-bold text-primary">Stable</h4>
+                {% else %}
+                    <i class="fas fa-info-circle fa-3x text-secondary mb-3"></i>
+                    <h4 class="fw-bold text-secondary">Not enough data</h4>
+                {% endif %}
+                {% if progress.trend_status != 'Not enough data' %}
+                    <p class="text-muted mb-0">{{ progress.trend_difference_absolute }} percentage points {{ 'higher' if progress.trend_difference > 0 else 'lower' if progress.trend_difference < 0 else 'from the comparison period' }}</p>
+                {% else %}
+                    <p class="text-muted mb-0">Complete another quiz to compare recent performance.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-transparent py-4">
+        <h5 class="mb-0 fw-bold"><i class="fas fa-list-check me-2 text-success"></i> Quiz-wise Score History</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Quiz</th>
+                        <th>Category</th>
+                        <th>Date</th>
+                        <th class="text-center">Score</th>
+                        <th class="text-end pe-4">Percentage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for result in progress.history %}
+                    <tr>
+                        <td class="ps-4"><strong>{{ result.title }}</strong></td>
+                        <td><span class="badge bg-primary bg-opacity-10 text-primary">{{ result.category or 'Uncategorized' }}</span></td>
+                        <td class="text-muted">{{ result.date_taken.strftime('%Y-%m-%d %H:%M') if result.date_taken else 'N/A' }}</td>
+                        <td class="text-center fw-bold">{{ result.score }} / {{ result.total_questions }}</td>
+                        <td class="text-end pe-4">
+                            <span class="badge {% if result.percentage >= 80 %}bg-success{% elif result.percentage >= 50 %}bg-primary{% else %}bg-danger{% endif %} bg-opacity-10 {% if result.percentage >= 80 %}text-success{% elif result.percentage >= 50 %}text-primary{% else %}text-danger{% endif %} rounded-pill px-3 py-2">
+                                {{ result.percentage }}%
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="fas fa-chart-line fa-3x text-light mb-3"></i>
+        <h4 class="fw-bold text-dark">No performance data yet</h4>
+        <p class="text-muted mb-4">Complete a quiz to start tracking your learning progress.</p>
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-primary rounded-pill px-4">Browse Quizzes</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
