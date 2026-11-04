@@ -1,0 +1,49 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="fas fa-medal me-2 text-success"></i> My Achievements</h2>
+        <p class="text-muted mb-0">Track your quiz milestones and earned badges.</p>
+    </div>
+    <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-primary rounded-pill">
+        <i class="fas fa-arrow-left me-1"></i> Dashboard
+    </a>
+</div>
+
+{% if achievements %}
+<div class="row g-4">
+    {% for achievement in achievements %}
+    <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 border-0 shadow-sm {% if achievement.earned %}border-top border-4 border-{{ achievement.color }}{% endif %}">
+            <div class="card-body text-center p-4">
+                <div class="rounded-circle bg-{{ achievement.color }} bg-opacity-10 d-inline-flex align-items-center justify-content-center mb-3" style="width: 82px; height: 82px;">
+                    <i class="fas {{ achievement.icon }} fa-2x text-{{ achievement.color }}"></i>
+                </div>
+                <h5 class="fw-bold">{{ achievement.name }}</h5>
+                <p class="text-muted small">{{ achievement.description }}</p>
+                {% if achievement.earned %}
+                    <span class="badge bg-{{ achievement.color }} rounded-pill px-3 py-2 mb-2">
+                        Earned{% if achievement.earned_date %} on {{ achievement.earned_date.strftime('%b %d, %Y') }}{% endif %}
+                    </span>
+                {% else %}
+                    <div class="progress mb-2" style="height: 8px;">
+                        <div class="progress-bar bg-{{ achievement.color }}" role="progressbar" style="width: {{ (achievement.progress / achievement.target * 100) | round(0) }}%"></div>
+                    </div>
+                    <small class="text-muted">{{ achievement.progress|round(0)|int }} / {{ achievement.target }} progress</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="fas fa-medal fa-3x text-muted mb-3"></i>
+        <h4 class="fw-bold">No achievement data yet</h4>
+        <p class="text-muted mb-0">Complete quizzes to start earning badges.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

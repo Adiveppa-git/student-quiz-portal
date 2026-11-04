@@ -165,6 +165,174 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+ACHIEVEMENT_DEFINITIONS = (
+    {
+        'key': 'first_steps',
+        'name': 'First Steps',
+        'description': 'Complete your first quiz.',
+        'icon': 'fa-shoe-prints',
+        'target': 1,
+        'kind': 'completed',
+        'color': 'primary',
+    },
+    {
+        'key': 'quiz_explorer',
+        'name': 'Quiz Explorer',
+        'description': 'Complete 5 quizzes.',
+        'icon': 'fa-compass',
+        'target': 5,
+        'kind': 'completed',
+        'color': 'info',
+    },
+    {
+        'key': 'quiz_champion',
+        'name': 'Quiz Champion',
+        'description': 'Complete 10 quizzes.',
+        'icon': 'fa-crown',
+        'target': 10,
+        'kind': 'completed',
+        'color': 'warning',
+    },
+    {
+        'key': 'perfect_score',
+        'name': 'Perfect Score',
+        'description': 'Score 100% on a completed quiz.',
+        'icon': 'fa-bullseye',
+        'target': 100,
+        'kind': 'percentage',
+        'color': 'success',
+    },
+    {
+        'key': 'high_achiever',
+        'name': 'High Achiever',
+        'description': 'Score at least 90% on a completed quiz.',
+        'icon': 'fa-star',
+        'target': 90,
+        'kind': 'percentage',
+        'color': 'danger',
+    },
+    {
+        'key': 'consistent_learner',
+        'name': 'Consistent Learner',
+        'description': 'Complete quizzes on 5 distinct calendar days.',
+        'icon': 'fa-calendar-check',
+        'target': 5,
+        'kind': 'days',
+        'color': 'secondary',
+    },
+)
+
+
+def calculate_student_achievements(results):
+    """Calculate achievements without writing award rows or modifying result records."""
+    valid_results = []
+    for result in results or []:
+        try:
+            score = int(result.get('score'))
+            total = int(result.get('total_questions'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if total <= 0 or score < 0 or score > total:
+            continue
+
+        date_taken = result.get('date_taken')
+        if isinstance(date_taken, datetime):
+            calendar_day = date_taken.date()
+        else:
+            calendar_day = None
+            for date_format in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+                try:
+                    calendar_day = datetime.strptime(str(date_taken), date_format).date()
+                    date_taken = datetime.strptime(str(date_taken), date_format)
+                    break
+                except (TypeError, ValueError):
+                    continue
+        percentage = score * 100.0 / total
+        valid_results.append({
+            'quiz_id': result.get('quiz_id'),
+            'score': score,
+            'total': total,
+            'percentage': percentage,
+            'date_taken': date_taken,
+            'calendar_day': calendar_day,
+        })
+
+    completed_quiz_ids = {
+        result['quiz_id'] for result in valid_results if result['quiz_id'] is not None
+    }
+    completed_count = len(completed_quiz_ids) if completed_quiz_ids else len(valid_results)
+
+    distinct_days = sorted({
+        result['calendar_day'] for result in valid_results
+        if result['calendar_day'] is not None
+    })
+
+    sorted_results = sorted(
+        valid_results,
+        key=lambda result: (
+            result['date_taken'] if isinstance(result['date_taken'], datetime) else datetime.min,
+        ),
+    )
+
+    earned = {}
+    for result in sorted_results:
+        quiz_id = result['quiz_id']
+        if quiz_id is not None:
+            milestone_count = sum(
+                1 for existing in sorted_results[:sorted_results.index(result) + 1]
+                if existing['quiz_id'] == quiz_id
+            )
+        else:
+            milestone_count = sorted_results.index(result) + 1
+
+        if result['percentage'] >= 100:
+            earned.setdefault('perfect_score', result['date_taken'])
+        if result['percentage'] >= 90:
+            earned.setdefault('high_achiever', result['date_taken'])
+
+    if completed_count >= 1:
+        earned['first_steps'] = _first_milestone_date(sorted_results, completed_count, 1)
+    if completed_count >= 5:
+        earned['quiz_explorer'] = _first_milestone_date(sorted_results, completed_count, 5)
+    if completed_count >= 10:
+        earned['quiz_champion'] = _first_milestone_date(sorted_results, completed_count, 10)
+    if len(distinct_days) >= 5:
+        earned['consistent_learner'] = distinct_days[4]
+
+    achievements = []
+    for definition in ACHIEVEMENT_DEFINITIONS:
+        key = definition['key']
+        if definition['kind'] == 'completed':
+            progress = min(completed_count, definition['target'])
+        elif definition['kind'] == 'days':
+            progress = min(len(distinct_days), definition['target'])
+        else:
+            highest = max((result['percentage'] for result in valid_results), default=0)
+            progress = min(highest, definition['target'])
+
+        achievement = dict(definition)
+        achievement['earned'] = key in earned
+        achievement['earned_date'] = earned.get(key)
+        achievement['progress'] = progress
+        achievements.append(achievement)
+    return achievements
+
+
+def _first_milestone_date(sorted_results, completed_count, milestone):
+    if milestone <= completed_count and sorted_results:
+        if any(result['quiz_id'] is None for result in sorted_results):
+            return sorted_results[milestone - 1]['date_taken']
+        seen_quizzes = set()
+        for result in sorted_results:
+            quiz_id = result['quiz_id']
+            if quiz_id is None or quiz_id not in seen_quizzes:
+                if quiz_id is not None:
+                    seen_quizzes.add(quiz_id)
+                if len(seen_quizzes) >= milestone:
+                    return result['date_taken']
+    return None
+
+
 def normalize_question_bank_ids(raw_ids):
     """Return unique positive integer IDs, or None when any submitted ID is invalid."""
     if not raw_ids:
@@ -2118,6 +2286,8 @@ def student_dashboard():
     # Show available quizzes
     conn = get_db_connection()
     quizzes = []
+    achievements = []
+    achievement_error = False
     
     if conn:
         try:
@@ -2126,10 +2296,31 @@ def student_dashboard():
                 quizzes = cursor.fetchall()
                 for quiz in quizzes:
                     quiz['availability_status'] = classify_quiz_availability(quiz)
+                cursor.execute(
+                    "SELECT quiz_id, score, total_questions, date_taken "
+                    "FROM results "
+                    "WHERE user_id = %s AND total_questions > 0 "
+                    "AND score >= 0 AND score <= total_questions "
+                    "ORDER BY date_taken ASC",
+                    (session['user_id'],),
+                )
+                achievements = calculate_student_achievements(cursor.fetchall())
+        except pymysql.MySQLError:
+            rollback_db(conn)
+            flash_database_error('loading your achievements')
+            achievement_error = True
         finally:
             conn.close()
-            
-    return render_template('student_dashboard.html', quizzes=quizzes)
+    else:
+        achievement_error = True
+        flash_database_error('loading your achievements')
+
+    return render_template(
+        'student_dashboard.html',
+        quizzes=quizzes,
+        achievements=[item for item in achievements if item['earned']][:4],
+        achievement_error=achievement_error,
+    )
 
 @app.route('/student/quiz/<int:quiz_id>', methods=['GET'])
 @student_required
@@ -2423,6 +2614,36 @@ def student_history():
         results=results,
         performance=performance,
     )
+
+@app.route('/student/achievements')
+@student_required
+def student_achievements():
+    conn = get_db_connection()
+    achievements = []
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return render_template('achievements.html', achievements=achievements)
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT quiz_id, score, total_questions, date_taken "
+                "FROM results "
+                "WHERE user_id = %s AND total_questions > 0 "
+                "AND score >= 0 AND score <= total_questions "
+                "ORDER BY date_taken ASC",
+                (session['user_id'],),
+            )
+            achievements = calculate_student_achievements(cursor.fetchall())
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading achievements')
+        achievements = []
+    finally:
+        conn.close()
+
+    return render_template('achievements.html', achievements=achievements)
+
 
 @app.route('/student/leaderboard')
 @student_required
