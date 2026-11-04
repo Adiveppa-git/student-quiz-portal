@@ -9,7 +9,7 @@ import io
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))
@@ -830,24 +830,113 @@ def admin_dashboard():
 @app.route('/admin/audit-log')
 @admin_required
 def admin_audit_log():
-    page = request.args.get('page', 1, type=int)
-    if page < 1:
+    per_page = 20
+    raw_page = request.args.get('page', '1').strip()
+    try:
+        page = int(raw_page)
+        if page < 1:
+            raise ValueError
+    except (TypeError, ValueError):
         page = 1
-    per_page = 25
-    offset = (page - 1) * per_page
+        flash('Invalid page number. Showing page 1.', 'warning')
+
+    search = request.args.get('search', '').strip()[:100]
+    action_type = request.args.get('action_type', '').strip()[:100]
+    entity_type = request.args.get('entity_type', '').strip()[:50]
+    start_date = request.args.get('start_date', '').strip()
+    end_date = request.args.get('end_date', '').strip()
+
+    parsed_start = None
+    parsed_end = None
+    try:
+        parsed_start = datetime.strptime(start_date, '%Y-%m-%d').date() if start_date else None
+    except ValueError:
+        flash('Invalid start date. Please use YYYY-MM-DD.', 'warning')
+        start_date = ''
+    try:
+        parsed_end = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else None
+    except ValueError:
+        flash('Invalid end date. Please use YYYY-MM-DD.', 'warning')
+        end_date = ''
+    if parsed_start and parsed_end and parsed_start > parsed_end:
+        flash('Start date must be before or equal to end date.', 'warning')
+        parsed_start = None
+        parsed_end = None
+        start_date = ''
+        end_date = ''
+
+    where_sql = []
+    where_params = []
+    if search:
+        where_sql.append('(u.username LIKE %s OR a.action_type LIKE %s)')
+        search_pattern = f'%{search}%'
+        where_params.extend([search_pattern, search_pattern])
+    if action_type:
+        where_sql.append('a.action_type = %s')
+        where_params.append(action_type)
+    if entity_type:
+        where_sql.append('a.entity_type = %s')
+        where_params.append(entity_type)
+    if parsed_start:
+        where_sql.append('a.created_at >= %s')
+        where_params.append(datetime.combine(parsed_start, datetime.min.time()))
+    if parsed_end:
+        where_sql.append('a.created_at < %s')
+        where_params.append(datetime.combine(parsed_end + timedelta(days=1), datetime.min.time()))
+
+    where_clause = (' WHERE ' + ' AND '.join(where_sql)) if where_sql else ''
 
     logs = []
     total_logs = 0
+    action_types = []
+    entity_types = []
     conn = get_db_connection()
     if conn:
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) AS count FROM admin_audit_logs")
-                count_row = cursor.fetchone()
-                total_logs = count_row['count'] if count_row else 0
+                cursor.execute(
+                    """
+                    SELECT DISTINCT action_type AS value
+                    FROM admin_audit_logs
+                    WHERE action_type IS NOT NULL AND action_type <> ''
+                    ORDER BY action_type
+                    """
+                )
+                action_types = [
+                    row['value'] for row in cursor.fetchall()
+                    if isinstance(row, dict) and row.get('value')
+                ]
 
                 cursor.execute(
                     """
+                    SELECT DISTINCT entity_type AS value
+                    FROM admin_audit_logs
+                    WHERE entity_type IS NOT NULL AND entity_type <> ''
+                    ORDER BY entity_type
+                    """
+                )
+                entity_types = [
+                    row['value'] for row in cursor.fetchall()
+                    if isinstance(row, dict) and row.get('value')
+                ]
+
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) AS count
+                    FROM admin_audit_logs a
+                    LEFT JOIN users u ON u.id = a.admin_user_id
+                    {where_clause}
+                    """,
+                    tuple(where_params),
+                )
+                count_row = cursor.fetchone()
+                total_logs = count_row['count'] if count_row else 0
+
+                total_pages = max(1, (total_logs + per_page - 1) // per_page)
+                if page > total_pages:
+                    page = total_pages
+                cursor.execute(
+                    f"""
                     SELECT a.id,
                            a.admin_user_id,
                            a.action_type,
@@ -858,10 +947,11 @@ def admin_audit_log():
                            u.username AS admin_username
                     FROM admin_audit_logs a
                     LEFT JOIN users u ON u.id = a.admin_user_id
+                    {where_clause}
                     ORDER BY a.created_at DESC, a.id DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (per_page, offset),
+                    tuple(where_params + [per_page, (page - 1) * per_page]),
                 )
                 logs = cursor.fetchall()
         except pymysql.MySQLError:
@@ -874,28 +964,6 @@ def admin_audit_log():
     total_pages = max(1, (total_logs + per_page - 1) // per_page)
     if page > total_pages:
         page = total_pages
-        offset = (page - 1) * per_page
-        conn = get_db_connection()
-        if conn:
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT a.id, a.admin_user_id, a.action_type, a.entity_type,
-                               a.entity_id, a.details, a.created_at,
-                               u.username AS admin_username
-                        FROM admin_audit_logs a
-                        LEFT JOIN users u ON u.id = a.admin_user_id
-                        ORDER BY a.created_at DESC, a.id DESC
-                        LIMIT %s OFFSET %s
-                        """,
-                        (per_page, offset),
-                    )
-                    logs = cursor.fetchall()
-            except pymysql.MySQLError:
-                flash_database_error('audit log lookup')
-            finally:
-                close_db_connection(conn)
 
     return render_template(
         'admin_audit_log.html',
@@ -903,6 +971,13 @@ def admin_audit_log():
         page=page,
         total_pages=total_pages,
         total_logs=total_logs,
+        search=search,
+        action_type=action_type,
+        entity_type=entity_type,
+        start_date=start_date,
+        end_date=end_date,
+        action_types=action_types,
+        entity_types=entity_types,
     )
 
 

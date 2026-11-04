@@ -120,6 +120,156 @@ class AdminAuditLogTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('No administrative activity has been recorded.', response.get_data(as_text=True))
 
+    def test_search_by_administrator_and_action_uses_parameterized_queries(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [
+            [{'value': 'QUIZ_CREATE'}],
+            [{'value': 'quiz'}],
+            {'count': 0},
+            [],
+        ]
+        cursor.fetchone.return_value = {'count': 0}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get('/admin/audit-log?search=admin-one')
+
+        self.assertEqual(response.status_code, 200)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertIn('(u.username LIKE %s OR a.action_type LIKE %s)', count_call.args[0])
+        self.assertEqual(count_call.args[1], ('%admin-one%', '%admin-one%'))
+        select_call = cursor.execute.call_args_list[3]
+        self.assertEqual(select_call.args[1][-2:], (20, 0))
+
+    def test_search_by_action_uses_parameterized_action_pattern(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], []]
+        cursor.fetchone.return_value = {'count': 1}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get('/admin/audit-log?search=QUIZ_DELETE')
+
+        self.assertEqual(response.status_code, 200)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertIn('(u.username LIKE %s OR a.action_type LIKE %s)', count_call.args[0])
+        self.assertEqual(count_call.args[1], ('%QUIZ_DELETE%', '%QUIZ_DELETE%'))
+
+    def test_action_and_entity_filters_are_combined(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 0}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get(
+                '/admin/audit-log?action_type=QUIZ_DELETE&entity_type=quiz'
+            )
+
+        self.assertEqual(response.status_code, 200)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertIn('a.action_type = %s', count_call.args[0])
+        self.assertIn('a.entity_type = %s', count_call.args[0])
+        self.assertEqual(count_call.args[1], ('QUIZ_DELETE', 'quiz'))
+
+    def test_date_range_filters_are_parameterized(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 2}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get(
+                '/admin/audit-log?start_date=2026-01-01&end_date=2026-01-31'
+            )
+
+        self.assertEqual(response.status_code, 200)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertIn('a.created_at >= %s', count_call.args[0])
+        self.assertIn('a.created_at < %s', count_call.args[0])
+        self.assertEqual(len(count_call.args[1]), 2)
+
+    def test_pagination_uses_twenty_records_and_reports_total(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 45}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get('/admin/audit-log?page=2')
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('45 matching events', body)
+        select_call = cursor.execute.call_args_list[3]
+        self.assertIn('LIMIT %s OFFSET %s', select_call.args[0])
+        self.assertEqual(select_call.args[1][-2:], (20, 20))
+
+    def test_filters_are_preserved_in_pagination_links(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 45}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get(
+                '/admin/audit-log?search=admin&action_type=QUIZ_DELETE'
+                '&entity_type=quiz&start_date=2026-01-01&end_date=2026-01-31&page=2'
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertIn('page=1', body)
+        self.assertIn('search=admin', body)
+        self.assertIn('action_type=QUIZ_DELETE', body)
+        self.assertIn('entity_type=quiz', body)
+        self.assertIn('start_date=2026-01-01', body)
+        self.assertIn('end_date=2026-01-31', body)
+
+    def test_invalid_page_and_invalid_dates_are_validated_server_side(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 0}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get(
+                '/admin/audit-log?page=not-a-page&start_date=bad-date&end_date=2026-13-40'
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Invalid page number. Showing page 1.', body)
+        self.assertIn('Invalid start date. Please use YYYY-MM-DD.', body)
+        self.assertIn('Invalid end date. Please use YYYY-MM-DD.', body)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertNotIn('a.created_at >= %s', count_call.args[0])
+        self.assertNotIn('a.created_at < %s', count_call.args[0])
+
+    def test_reversed_date_range_is_rejected_without_filtering(self):
+        self.set_session('admin', 1)
+        connection, cursor = self.mock_connection()
+        cursor.fetchall.side_effect = [[], [], [], []]
+        cursor.fetchone.return_value = {'count': 0}
+
+        with patch.object(app, 'is_session_role_valid', return_value=True), \
+             patch.object(app, 'get_db_connection', return_value=connection):
+            response = self.client.get(
+                '/admin/audit-log?start_date=2026-02-01&end_date=2026-01-01'
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Start date must be before or equal to end date.', body)
+        count_call = cursor.execute.call_args_list[2]
+        self.assertEqual(count_call.args[1], ())
+
     def test_audit_history_database_error_is_generic_and_safe(self):
         self.set_session('admin', 1)
         connection, cursor = self.mock_connection()

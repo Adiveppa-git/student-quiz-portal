@@ -13,6 +13,55 @@
     </div>
 </div>
 
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="get" action="{{ url_for('admin_audit_log') }}" class="row g-3 align-items-end">
+            <div class="col-lg-3 col-md-6">
+                <label for="audit-search" class="form-label fw-semibold">Search administrator or action</label>
+                <input id="audit-search" type="search" name="search" class="form-control" maxlength="100"
+                       value="{{ search }}" placeholder="Username or action">
+            </div>
+            <div class="col-lg-2 col-md-6">
+                <label for="audit-action" class="form-label fw-semibold">Action</label>
+                <select id="audit-action" name="action_type" class="form-select">
+                    <option value="">All actions</option>
+                    {% for available_action in action_types %}
+                        <option value="{{ available_action }}" {% if action_type == available_action %}selected{% endif %}>{{ available_action }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-2 col-md-6">
+                <label for="audit-entity" class="form-label fw-semibold">Entity</label>
+                <select id="audit-entity" name="entity_type" class="form-select">
+                    <option value="">All entities</option>
+                    {% for available_entity in entity_types %}
+                        <option value="{{ available_entity }}" {% if entity_type == available_entity %}selected{% endif %}>{{ available_entity }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-lg-2 col-md-3">
+                <label for="audit-start-date" class="form-label fw-semibold">Start date</label>
+                <input id="audit-start-date" type="date" name="start_date" class="form-control" value="{{ start_date }}">
+            </div>
+            <div class="col-lg-2 col-md-3">
+                <label for="audit-end-date" class="form-label fw-semibold">End date</label>
+                <input id="audit-end-date" type="date" name="end_date" class="form-control" value="{{ end_date }}">
+            </div>
+            <div class="col-lg-1 col-md-12 d-grid gap-2">
+                <button type="submit" class="btn btn-primary rounded-pill">Apply</button>
+            </div>
+        </form>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+            <span class="text-muted small">{{ total_logs }} matching event{{ 's' if total_logs != 1 else '' }}</span>
+            {% if search or action_type or entity_type or start_date or end_date %}
+            <a href="{{ url_for('admin_audit_log') }}" class="btn btn-sm btn-outline-secondary rounded-pill">
+                <i class="fas fa-times me-1"></i> Clear filters
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
 <div class="card border-0 shadow-sm">
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -51,7 +100,11 @@
                         <tr>
                             <td colspan="5" class="text-center py-5 text-muted">
                                 <i class="fas fa-clipboard-list fa-3x mb-3 text-light"></i>
-                                <p class="mb-0">No administrative activity has been recorded.</p>
+                                {% if search or action_type or entity_type or start_date or end_date %}
+                                    <p class="mb-0">No administrative events match the selected filters.</p>
+                                {% else %}
+                                    <p class="mb-0">No administrative activity has been recorded.</p>
+                                {% endif %}
                             </td>
                         </tr>
                     {% endif %}
@@ -65,17 +118,17 @@
 <nav class="mt-4" aria-label="Audit log pagination">
     <ul class="pagination justify-content-center">
         <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-            <a class="page-link rounded-pill me-2" href="{{ url_for('admin_audit_log', page=page-1) }}" tabindex="-1">Previous</a>
+            <a class="page-link rounded-pill me-2" href="{{ url_for('admin_audit_log', page=page-1, search=search, action_type=action_type, entity_type=entity_type, start_date=start_date, end_date=end_date) }}" tabindex="-1">Previous</a>
         </li>
         {% for page_number in range(1, total_pages + 1) %}
             {% if page_number <= 2 or page_number > total_pages - 2 or (page_number - page)|abs <= 2 %}
             <li class="page-item {% if page_number == page %}active{% endif %}">
-                <a class="page-link rounded-circle mx-1" href="{{ url_for('admin_audit_log', page=page_number) }}">{{ page_number }}</a>
+                <a class="page-link rounded-circle mx-1" href="{{ url_for('admin_audit_log', page=page_number, search=search, action_type=action_type, entity_type=entity_type, start_date=start_date, end_date=end_date) }}">{{ page_number }}</a>
             </li>
             {% endif %}
         {% endfor %}
         <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-            <a class="page-link rounded-pill ms-2" href="{{ url_for('admin_audit_log', page=page+1) }}">Next</a>
+            <a class="page-link rounded-pill ms-2" href="{{ url_for('admin_audit_log', page=page+1, search=search, action_type=action_type, entity_type=entity_type, start_date=start_date, end_date=end_date) }}">Next</a>
         </li>
     </ul>
 </nav>
