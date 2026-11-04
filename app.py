@@ -165,6 +165,77 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+def calculate_quiz_recommendations(results, available_quizzes, limit=8):
+    """Rank uncompleted, available quizzes using the student's category averages."""
+    category_scores = {}
+    for result in results or []:
+        try:
+            score = int(result.get('score'))
+            total_questions = int(result.get('total_questions'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if total_questions <= 0 or score < 0 or score > total_questions:
+            continue
+        category = result.get('category')
+        if category is None:
+            continue
+        category = str(category).strip()
+        if not category:
+            continue
+        scores = category_scores.setdefault(category, [])
+        scores.append(round(score * 100.0 / total_questions, 1))
+
+    category_averages = {
+        category: round(sum(scores) / len(scores), 1)
+        for category, scores in category_scores.items()
+    }
+    weakest_categories = sorted(
+        category_averages,
+        key=lambda category: (category_averages[category], category.lower()),
+    )
+    category_rank = {
+        category: index
+        for index, category in enumerate(weakest_categories)
+    }
+
+    recommendations = []
+    for quiz in available_quizzes or []:
+        if classify_quiz_availability(quiz) != 'active':
+            continue
+        category = quiz.get('category')
+        category = str(category).strip() if category is not None else ''
+
+        if not category_scores:
+            reason = "No completed quiz history yet, so this is a good starting quiz."
+        elif category and category in category_averages:
+            average = category_averages[category]
+            reason = (
+                f"Your recorded average in {category} is {average}%, "
+                "making this an opportunity for focused practice."
+            )
+        elif category:
+            reason = (
+                f"This active {category} quiz has not appeared in your completed results yet."
+            )
+        elif category_scores:
+            reason = "This active quiz is available for additional practice."
+        else:
+            reason = "No completed quiz history yet, so this is a good starting quiz."
+
+        recommendation = dict(quiz)
+        recommendation['availability_status'] = 'active'
+        recommendation['reason'] = reason
+        recommendation['category_average'] = category_averages.get(category)
+        recommendations.append(recommendation)
+
+    recommendations.sort(key=lambda quiz: (
+        category_rank.get(str(quiz.get('category')).strip(), len(category_rank)),
+        str(quiz.get('title') or '').lower(),
+        int(quiz.get('id') or 0),
+    ))
+    return recommendations[:limit]
+
+
 def calculate_subject_wise_analysis(results):
     """Aggregate valid student results by the existing quiz category field."""
     grouped = {}
@@ -2849,6 +2920,65 @@ def student_progress():
         close_db_connection(conn)
 
     return render_template('progress.html', progress=progress)
+
+@app.route('/student/recommendations')
+@student_required
+def student_quiz_recommendations():
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return render_template('recommendations.html', recommendations=[], has_history=False)
+
+    recommendations = []
+    has_history = False
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT r.score, r.total_questions, q.category
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                WHERE r.user_id = %s
+                  AND r.total_questions > 0
+                  AND r.score >= 0
+                  AND r.score <= r.total_questions
+                ORDER BY q.category ASC
+                ''',
+                (session['user_id'],),
+            )
+            results = cursor.fetchall()
+            has_history = bool(results)
+
+            cursor.execute(
+                '''
+                SELECT q.id, q.title, q.description, q.category,
+                       q.time_limit_minutes, q.available_from, q.available_until
+                FROM quizzes q
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM results r
+                    WHERE r.user_id = %s AND r.quiz_id = q.id
+                )
+                  AND EXISTS (
+                    SELECT 1 FROM questions qu WHERE qu.quiz_id = q.id
+                  )
+                ORDER BY q.id ASC
+                ''',
+                (session['user_id'],),
+            )
+            recommendations = calculate_quiz_recommendations(results, cursor.fetchall())
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('personalized quiz recommendations')
+        recommendations = []
+        has_history = False
+    finally:
+        close_db_connection(conn)
+
+    return render_template(
+        'recommendations.html',
+        recommendations=recommendations,
+        has_history=has_history,
+    )
 
 @app.route('/student/achievements')
 @student_required
