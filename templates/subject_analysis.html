@@ -1,0 +1,146 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h2 class="fw-bold mb-1"><i class="fas fa-layer-group me-2 text-primary"></i> Subject-Wise Analysis</h2>
+        <p class="text-muted mb-0">Compare your completed quiz scores by the quiz category.</p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-primary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Dashboard
+        </a>
+    </div>
+</div>
+
+{% if analysis.subjects %}
+<div class="row g-4 mb-5">
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body text-center py-4">
+                <i class="fas fa-arrow-up fa-2x text-success mb-3"></i>
+                {% if analysis.strongest %}
+                    <div class="text-uppercase small text-muted fw-bold">Strongest Subject</div>
+                    <h4 class="fw-bold text-success mb-1">{{ analysis.strongest.subject }}</h4>
+                    <span class="badge bg-success bg-opacity-10 text-success rounded-pill px-3 py-2">{{ analysis.strongest.average_score }}% average</span>
+                {% else %}
+                    <div class="text-uppercase small text-muted fw-bold">Strongest Subject</div>
+                    <h5 class="fw-bold text-dark mb-2">Not enough data</h5>
+                    <small class="text-muted">Complete quizzes in at least two subject categories.</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body text-center py-4">
+                <i class="fas fa-arrow-down fa-2x text-danger mb-3"></i>
+                {% if analysis.weakest %}
+                    <div class="text-uppercase small text-muted fw-bold">Weakest Subject</div>
+                    <h4 class="fw-bold text-danger mb-1">{{ analysis.weakest.subject }}</h4>
+                    <span class="badge bg-danger bg-opacity-10 text-danger rounded-pill px-3 py-2">{{ analysis.weakest.average_score }}% average</span>
+                {% else %}
+                    <div class="text-uppercase small text-muted fw-bold">Weakest Subject</div>
+                    <h5 class="fw-bold text-dark mb-2">Not enough data</h5>
+                    <small class="text-muted">Complete quizzes in at least two subject categories.</small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mb-5">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-chart-bar me-2 text-primary"></i> Subject Comparison</h5>
+            </div>
+            <div class="card-body">
+                {% for subject in analysis.subjects %}
+                <div class="mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <strong class="text-dark">{{ subject.subject }}</strong>
+                        <span class="fw-bold text-primary">{{ subject.average_score }}%</span>
+                    </div>
+                    <div class="progress" style="height: 14px;" role="progressbar"
+                         aria-label="{{ subject.subject }} average score"
+                         aria-valuemin="0" aria-valuemax="100"
+                         aria-valuenow="{{ subject.average_score }}">
+                        {% if subject.average_score >= 80 %}
+                            {% set bar_class = 'bg-success' %}
+                        {% elif subject.average_score >= 50 %}
+                            {% set bar_class = 'bg-primary' %}
+                        {% else %}
+                            {% set bar_class = 'bg-danger' %}
+                        {% endif %}
+                        <div class="progress-bar {{ bar_class }} rounded-pill" style="width: {{ subject.average_score }}%;"></div>
+                    </div>
+                    <small class="text-muted">{{ subject.completed_quizzes }} completed {{ 'quizzes' if subject.completed_quizzes != 1 else 'quiz' }}</small>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-lightbulb me-2 text-warning"></i> Improvement Suggestions</h5>
+            </div>
+            <div class="card-body">
+                {% if analysis.suggestions %}
+                    <ul class="list-group list-group-flush">
+                        {% for suggestion in analysis.suggestions %}
+                        <li class="list-group-item px-0 d-flex">
+                            <i class="fas fa-check-circle text-success mt-1 me-3"></i>
+                            <span>{{ suggestion }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted mb-0">Complete more scored quizzes to generate suggestions based on actual performance.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-transparent py-4">
+        <h5 class="mb-0 fw-bold"><i class="fas fa-table me-2 text-info"></i> Subject Summary</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Subject / Category</th>
+                        <th class="text-center">Completed Quizzes</th>
+                        <th class="text-end pe-4">Average Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for subject in analysis.subjects %}
+                    <tr>
+                        <td class="ps-4"><strong>{{ subject.subject }}</strong></td>
+                        <td class="text-center">{{ subject.completed_quizzes }}</td>
+                        <td class="text-end pe-4">
+                            <span class="badge bg-primary bg-opacity-10 text-primary rounded-pill px-3 py-2">{{ subject.average_score }}%</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="fas fa-layer-group fa-3x text-light mb-3"></i>
+        <h4 class="fw-bold text-dark">No subject performance data yet</h4>
+        <p class="text-muted mb-4">Complete quizzes with a category to see subject-wise analysis. Quizzes without a category are not included.</p>
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-primary rounded-pill px-4">Browse Quizzes</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

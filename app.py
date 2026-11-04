@@ -165,6 +165,90 @@ def validate_question_bank_payload(category=None, difficulty=None, **question_va
     return True, normalized, None
 
 
+def calculate_subject_wise_analysis(results):
+    """Aggregate valid student results by the existing quiz category field."""
+    grouped = {}
+    valid_count = 0
+
+    for result in results or []:
+        try:
+            score = int(result.get('score'))
+            total_questions = int(result.get('total_questions'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if total_questions <= 0 or score < 0 or score > total_questions:
+            continue
+
+        category = result.get('category')
+        if category is None:
+            continue
+        category = str(category).strip()
+        if not category:
+            continue
+
+        valid_count += 1
+        percentage = round(score * 100.0 / total_questions, 1)
+        group = grouped.setdefault(category, {
+            'subject': category,
+            'completed_quizzes': 0,
+            'percentages': [],
+        })
+        group['completed_quizzes'] += 1
+        group['percentages'].append(percentage)
+
+    subjects = []
+    for category in sorted(grouped):
+        group = grouped[category]
+        subjects.append({
+            'subject': category,
+            'completed_quizzes': group['completed_quizzes'],
+            'average_score': round(
+                sum(group['percentages']) / len(group['percentages']),
+                1,
+            ),
+        })
+
+    strongest = None
+    weakest = None
+    if len(subjects) >= 2:
+        highest = max(subject['average_score'] for subject in subjects)
+        lowest = min(subject['average_score'] for subject in subjects)
+        strongest = next(
+            subject for subject in subjects
+            if subject['average_score'] == highest
+        )
+        weakest = next(
+            subject for subject in subjects
+            if subject['average_score'] == lowest
+        )
+
+    suggestions = []
+    if weakest and weakest['average_score'] < 80:
+        suggestions.append(
+            f"Review recent {weakest['subject']} quizzes and practice missed topics; "
+            f"its average is {weakest['average_score']}%."
+        )
+    elif subjects:
+        suggestions.append(
+            'Keep practicing across your subjects to maintain your current performance.'
+        )
+
+    for subject in subjects:
+        if subject['average_score'] >= 90:
+            suggestions.append(
+                f"{subject['subject']} is a strong area at {subject['average_score']}%; "
+                "use it to reinforce confidence and help identify reusable study methods."
+            )
+
+    return {
+        'subjects': subjects,
+        'strongest': strongest,
+        'weakest': weakest,
+        'suggestions': suggestions[:4],
+        'valid_count': valid_count,
+    }
+
+
 def calculate_learning_progress(results):
     """Build summary and trend data only from valid completed result rows."""
     valid_results = []
@@ -2693,6 +2777,43 @@ def student_history():
         results=results,
         performance=performance,
     )
+
+@app.route('/student/subject-analysis')
+@student_required
+def student_subject_analysis():
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return render_template(
+            'subject_analysis.html',
+            analysis=calculate_subject_wise_analysis([]),
+        )
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                '''
+                SELECT r.score, r.total_questions, q.category
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                WHERE r.user_id = %s
+                  AND r.total_questions > 0
+                  AND r.score >= 0
+                  AND r.score <= r.total_questions
+                ORDER BY q.category ASC
+                ''',
+                (session['user_id'],),
+            )
+            analysis = calculate_subject_wise_analysis(cursor.fetchall())
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('subject-wise performance analysis')
+        analysis = calculate_subject_wise_analysis([])
+    finally:
+        close_db_connection(conn)
+
+    return render_template('subject_analysis.html', analysis=analysis)
+
 
 @app.route('/student/progress')
 @student_required
