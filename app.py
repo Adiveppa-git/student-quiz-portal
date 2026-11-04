@@ -780,25 +780,49 @@ def logout():
 @app.route('/admin/dashboard')
 @admin_required
 def admin_dashboard():
-    # Show summary: total students, total quizzes, etc.
     conn = get_db_connection()
-    stats = {'students': 0, 'quizzes': 0, 'questions': 0}
+    stats = {
+        'students': 0,
+        'quizzes': 0,
+        'questions': 0,
+        'attempts': 0,
+        'average_score': None,
+    }
     recent_quizzes = []
     quiz_performance = []
-    
+    popular_quizzes = []
+    recent_registrations = []
+    recent_quiz_activity = []
+
     if conn:
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) as count FROM users WHERE role='student'")
-                stats['students'] = cursor.fetchone()['count']
-                
-                cursor.execute("SELECT COUNT(*) as count FROM quizzes")
-                stats['quizzes'] = cursor.fetchone()['count']
-                
-                cursor.execute("SELECT COUNT(*) as count FROM questions")
-                stats['questions'] = cursor.fetchone()['count']
-                
-                cursor.execute("SELECT * FROM quizzes ORDER BY created_at DESC LIMIT 5")
+                cursor.execute("""
+                    SELECT
+                        (SELECT COUNT(*) FROM users WHERE role = 'student') AS students,
+                        (SELECT COUNT(*) FROM quizzes) AS quizzes,
+                        (SELECT COUNT(*) FROM questions) AS questions,
+                        (SELECT COUNT(*) FROM quiz_attempts) AS attempts,
+                        (
+                            SELECT AVG(r.score * 100.0 / NULLIF(r.total_questions, 0))
+                            FROM results r
+                        ) AS average_score
+                """)
+                summary = cursor.fetchone() or {}
+                stats.update({
+                    'students': summary.get('students', 0) or 0,
+                    'quizzes': summary.get('quizzes', 0) or 0,
+                    'questions': summary.get('questions', 0) or 0,
+                    'attempts': summary.get('attempts', 0) or 0,
+                    'average_score': summary.get('average_score'),
+                })
+
+                cursor.execute("""
+                    SELECT id, title, description, category, time_limit_minutes, created_at
+                    FROM quizzes
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 5
+                """)
                 recent_quizzes = cursor.fetchall()
 
                 cursor.execute("""
@@ -817,14 +841,61 @@ def admin_dashboard():
                     ORDER BY q.title ASC
                 """)
                 quiz_performance = cursor.fetchall()
+
+                cursor.execute("""
+                    SELECT q.id,
+                           q.title,
+                           q.category,
+                           COUNT(r.id) AS attempt_count,
+                           AVG(r.score * 100.0 / NULLIF(r.total_questions, 0)) AS average_percentage
+                    FROM quizzes q
+                    JOIN results r ON r.quiz_id = q.id
+                    GROUP BY q.id, q.title, q.category
+                    ORDER BY attempt_count DESC, q.title ASC
+                    LIMIT 5
+                """)
+                popular_quizzes = cursor.fetchall()
+
+                cursor.execute("""
+                    SELECT id, username, created_at
+                    FROM users
+                    WHERE role = 'student'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 5
+                """)
+                recent_registrations = cursor.fetchall()
+
+                cursor.execute("""
+                    SELECT r.id,
+                           r.score,
+                           r.total_questions,
+                           r.date_taken,
+                           r.score * 100.0 / NULLIF(r.total_questions, 0) AS percentage,
+                           u.username AS student_username,
+                           q.title AS quiz_title
+                    FROM results r
+                    JOIN users u ON u.id = r.user_id
+                    JOIN quizzes q ON q.id = r.quiz_id
+                    WHERE u.role = 'student'
+                    ORDER BY r.date_taken DESC, r.id DESC
+                    LIMIT 5
+                """)
+                recent_quiz_activity = cursor.fetchall()
+        except pymysql.MySQLError:
+            flash_database_error('admin dashboard analytics')
         finally:
             conn.close()
-            
+    else:
+        flash_database_error('admin dashboard analytics')
+
     return render_template(
         'admin_dashboard.html',
         stats=stats,
         quizzes=recent_quizzes,
         quiz_performance=quiz_performance,
+        popular_quizzes=popular_quizzes,
+        recent_registrations=recent_registrations,
+        recent_quiz_activity=recent_quiz_activity,
     )
 
 @app.route('/admin/audit-log')
