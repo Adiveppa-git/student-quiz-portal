@@ -88,6 +88,51 @@ def validate_quiz_time_limit(value):
     return time_limit if time_limit > 0 else None
 
 
+def validate_study_task_input(title, description, target_date, quiz_id):
+    title = (title or '').strip()
+    description = (description or '').strip()
+    if not title:
+        return None, None, None, 'Task title is required.'
+    if len(title) > 120:
+        return None, None, None, 'Task title must be 120 characters or fewer.'
+    if len(description) > 1000:
+        return None, None, None, 'Description must be 1000 characters or fewer.'
+
+    try:
+        parsed_date = datetime.strptime((target_date or '').strip(), '%Y-%m-%d').date()
+    except ValueError:
+        return None, None, None, 'Target date must be a valid date in YYYY-MM-DD format.'
+
+    quiz_value = (quiz_id or '').strip()
+    related_quiz_id = None
+    if quiz_value:
+        try:
+            related_quiz_id = int(quiz_value)
+            if related_quiz_id <= 0:
+                return None, None, None, 'Invalid related quiz.'
+        except (TypeError, ValueError):
+            return None, None, None, 'Invalid related quiz.'
+    return title, description, (parsed_date, related_quiz_id), None
+
+
+def classify_study_task(task, today=None):
+    current_date = today or datetime.now().date()
+    target_date = task.get('target_date')
+    if isinstance(target_date, datetime):
+        target_date = target_date.date()
+    if isinstance(target_date, str):
+        try:
+            target_date = datetime.strptime(target_date, '%Y-%m-%d').date()
+        except ValueError:
+            target_date = None
+
+    if bool(task.get('is_completed')):
+        return 'completed'
+    if target_date is not None and target_date < current_date:
+        return 'overdue'
+    return 'upcoming'
+
+
 def parse_quiz_schedule_value(value):
     if value is None or str(value).strip() == '':
         return None
@@ -2521,6 +2566,7 @@ def student_dashboard():
     conn = get_db_connection()
     quizzes = []
     achievements = []
+    upcoming_study_tasks = []
     achievement_error = False
     
     if conn:
@@ -2550,6 +2596,22 @@ def student_dashboard():
                     (session['user_id'],),
                 )
                 achievements = calculate_student_achievements(cursor.fetchall())
+                cursor.execute(
+                    """
+                    SELECT st.id, st.title, st.description, st.quiz_id, st.target_date,
+                           st.is_completed, q.title AS quiz_title
+                    FROM student_study_tasks st
+                    LEFT JOIN quizzes q ON q.id = st.quiz_id
+                    WHERE st.student_id = %s AND st.is_completed = FALSE
+                    ORDER BY st.target_date ASC, st.id ASC
+                    LIMIT 5
+                    """,
+                    (session['user_id'],),
+                )
+                upcoming_study_tasks = []
+                for task in cursor.fetchall():
+                    task['status'] = classify_study_task(task)
+                    upcoming_study_tasks.append(task)
         except pymysql.MySQLError:
             rollback_db(conn)
             flash_database_error('loading your achievements')
@@ -2565,7 +2627,221 @@ def student_dashboard():
         quizzes=quizzes,
         achievements=[item for item in achievements if item['earned']][:4],
         achievement_error=achievement_error,
+        upcoming_study_tasks=upcoming_study_tasks,
     )
+
+@app.route('/student/study-planner')
+@student_required
+def student_study_planner():
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('loading the study planner')
+        return render_template('student_study_planner.html', tasks=[], upcoming=[], completed=[], overdue=[], summary={'total': 0, 'completed': 0, 'upcoming': 0, 'overdue': 0, 'completion_percent': 0}, quizzes=[], edit_task=None)
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT st.id, st.title, st.description, st.quiz_id, st.target_date,
+                       st.is_completed, st.created_at, st.updated_at, q.title AS quiz_title
+                FROM student_study_tasks st
+                LEFT JOIN quizzes q ON q.id = st.quiz_id
+                WHERE st.student_id = %s
+                ORDER BY st.is_completed ASC, st.target_date ASC, st.id DESC
+                """,
+                (session['user_id'],),
+            )
+            tasks = cursor.fetchall()
+            cursor.execute(
+                "SELECT id, title FROM quizzes ORDER BY title ASC",
+            )
+            quizzes = cursor.fetchall()
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading the study planner')
+        tasks, quizzes = [], []
+    finally:
+        conn.close()
+
+    upcoming, completed, overdue = [], [], []
+    for task in tasks:
+        task['status'] = classify_study_task(task)
+        if task['status'] == 'completed':
+            completed.append(task)
+        elif task['status'] == 'overdue':
+            overdue.append(task)
+        else:
+            upcoming.append(task)
+
+    total = len(tasks)
+    completed_count = len(completed)
+    summary = {
+        'total': total,
+        'completed': completed_count,
+        'upcoming': len(upcoming),
+        'overdue': len(overdue),
+        'completion_percent': round(completed_count * 100 / total) if total else 0,
+    }
+    return render_template(
+        'student_study_planner.html',
+        tasks=tasks,
+        upcoming=upcoming,
+        completed=completed,
+        overdue=overdue,
+        summary=summary,
+        quizzes=quizzes,
+        edit_task=None,
+    )
+
+
+@app.route('/student/study-planner/tasks', methods=['POST'])
+@student_required
+def create_study_task():
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('creating study task')
+        return redirect(url_for('student_study_planner'))
+    try:
+        title, description, parsed, error = validate_study_task_input(
+            request.form.get('title'),
+            request.form.get('description'),
+            request.form.get('target_date'),
+            request.form.get('quiz_id'),
+        )
+        if error:
+            flash(error, 'warning')
+            return redirect(url_for('student_study_planner'))
+        target_date, quiz_id = parsed
+
+        with conn.cursor() as cursor:
+            if quiz_id is not None:
+                cursor.execute("SELECT id FROM quizzes WHERE id = %s", (quiz_id,))
+                if cursor.fetchone() is None:
+                    flash('Related quiz not found.', 'warning')
+                    return redirect(url_for('student_study_planner'))
+            cursor.execute(
+                """
+                INSERT INTO student_study_tasks
+                    (student_id, title, description, quiz_id, target_date, is_completed)
+                VALUES (%s, %s, %s, %s, %s, FALSE)
+                """,
+                (session['user_id'], title, description or None, quiz_id, target_date),
+            )
+            conn.commit()
+            flash('Study task created.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('creating study task')
+    finally:
+        conn.close()
+    return redirect(url_for('student_study_planner'))
+
+
+@app.route('/student/study-planner/tasks/<int:task_id>/edit', methods=['POST'])
+@student_required
+def edit_study_task(task_id):
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('updating study task')
+        return redirect(url_for('student_study_planner'))
+    try:
+        title, description, parsed, error = validate_study_task_input(
+            request.form.get('title'),
+            request.form.get('description'),
+            request.form.get('target_date'),
+            request.form.get('quiz_id'),
+        )
+        if error:
+            flash(error, 'warning')
+            return redirect(url_for('student_study_planner'))
+        target_date, quiz_id = parsed
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM student_study_tasks WHERE id = %s AND student_id = %s",
+                (task_id, session['user_id']),
+            )
+            if cursor.fetchone() is None:
+                flash('Study task not found.', 'danger')
+                return redirect(url_for('student_study_planner'))
+            if quiz_id is not None:
+                cursor.execute("SELECT id FROM quizzes WHERE id = %s", (quiz_id,))
+                if cursor.fetchone() is None:
+                    flash('Related quiz not found.', 'warning')
+                    return redirect(url_for('student_study_planner'))
+            cursor.execute(
+                """
+                UPDATE student_study_tasks
+                SET title = %s, description = %s, quiz_id = %s, target_date = %s
+                WHERE id = %s AND student_id = %s
+                """,
+                (title, description or None, quiz_id, target_date, task_id, session['user_id']),
+            )
+            conn.commit()
+            flash('Study task updated.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating study task')
+    finally:
+        conn.close()
+    return redirect(url_for('student_study_planner'))
+
+
+@app.route('/student/study-planner/tasks/<int:task_id>/delete', methods=['POST'])
+@student_required
+def delete_study_task(task_id):
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('deleting study task')
+        return redirect(url_for('student_study_planner'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM student_study_tasks WHERE id = %s AND student_id = %s",
+                (task_id, session['user_id']),
+            )
+            conn.commit()
+            if cursor.rowcount:
+                flash('Study task deleted.', 'success')
+            else:
+                flash('Study task not found.', 'danger')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('deleting study task')
+    finally:
+        conn.close()
+    return redirect(url_for('student_study_planner'))
+
+
+@app.route('/student/study-planner/tasks/<int:task_id>/status', methods=['POST'])
+@student_required
+def update_study_task_status(task_id):
+    completed = (request.form.get('is_completed') == 'true')
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('updating study task status')
+        return redirect(url_for('student_study_planner'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE student_study_tasks
+                SET is_completed = %s
+                WHERE id = %s AND student_id = %s
+                """,
+                (completed, task_id, session['user_id']),
+            )
+            conn.commit()
+            if cursor.rowcount:
+                flash('Study task marked complete.' if completed else 'Study task marked pending.', 'success')
+            else:
+                flash('Study task not found.', 'danger')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating study task status')
+    finally:
+        conn.close()
+    return redirect(url_for('student_study_planner'))
+
 
 @app.route('/student/favorites/<int:quiz_id>/add', methods=['POST'])
 @student_required

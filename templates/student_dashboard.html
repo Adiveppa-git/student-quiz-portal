@@ -13,6 +13,7 @@
         <a href="{{ url_for('student_subject_analysis') }}" class="btn btn-outline-secondary rounded-pill px-4 shadow-sm me-2"><i class="fas fa-layer-group me-1"></i> Subjects</a>
         <a href="{{ url_for('student_quiz_recommendations') }}" class="btn btn-outline-danger rounded-pill px-4 shadow-sm me-2"><i class="fas fa-lightbulb me-1"></i> Recommendations</a>
         <a href="{{ url_for('student_favorites') }}" class="btn btn-outline-dark rounded-pill px-4 shadow-sm me-2"><i class="fas fa-heart me-1"></i> Favorites</a>
+        <a href="{{ url_for('student_study_planner') }}" class="btn btn-outline-primary rounded-pill px-4 shadow-sm me-2"><i class="fas fa-calendar-check me-1"></i> Study Planner</a>
         <a href="{{ url_for('student_history') }}" class="btn btn-outline-primary rounded-pill px-4 shadow-sm"><i class="fas fa-history me-1"></i> My History</a>
     </div>
 </div>
@@ -54,6 +55,43 @@
     </div>
 </div>
 {% endif %}
+
+<div class="mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-bold"><i class="fas fa-calendar-check me-2 text-primary"></i> Upcoming Study Tasks</h4>
+        <a href="{{ url_for('student_study_planner') }}" class="btn btn-sm btn-outline-primary rounded-pill">Open Study Planner</a>
+    </div>
+    {% if upcoming_study_tasks %}
+    <div class="row g-3">
+        {% for task in upcoming_study_tasks %}
+        <div class="col-md-6 col-lg-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between gap-2">
+                        <h6 class="fw-bold mb-1">{{ task.title }}</h6>
+                        {% if task.status == 'overdue' %}
+                        <span class="badge bg-danger bg-opacity-10 text-danger align-self-start">Overdue</span>
+                        {% else %}
+                        <span class="badge bg-info bg-opacity-10 text-info align-self-start">Upcoming</span>
+                        {% endif %}
+                    </div>
+                    <small class="text-muted"><i class="far fa-calendar me-1"></i>{{ task.target_date }}</small>
+                    {% if task.quiz_title %}
+                    <div class="small mt-2"><i class="fas fa-book me-1 text-primary"></i>{{ task.quiz_title }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card border-0 shadow-sm">
+        <div class="card-body text-center text-muted py-4">
+            No upcoming study tasks. <a href="{{ url_for('student_study_planner') }}">Create one</a>.
+        </div>
+    </div>
+    {% endif %}
+</div>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h4 class="mb-0 fw-bold"><i class="fas fa-list-ul me-2 text-primary"></i> Available Quizzes</h4>
