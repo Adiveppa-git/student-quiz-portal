@@ -115,6 +115,30 @@ def validate_study_task_input(title, description, target_date, quiz_id):
     return title, description, (parsed_date, related_quiz_id), None
 
 
+def validate_revision_note_input(title, content, quiz_id):
+    title = (title or '').strip()
+    content = (content or '').strip()
+    if not title:
+        return None, None, None, 'Note title is required.'
+    if len(title) > 120:
+        return None, None, None, 'Note title must be 120 characters or fewer.'
+    if not content:
+        return None, None, None, 'Note content is required.'
+    if len(content) > 10000:
+        return None, None, None, 'Note content must be 10000 characters or fewer.'
+
+    quiz_value = (quiz_id or '').strip()
+    related_quiz_id = None
+    if quiz_value:
+        try:
+            related_quiz_id = int(quiz_value)
+            if related_quiz_id <= 0:
+                return None, None, None, 'Invalid related quiz.'
+        except (TypeError, ValueError):
+            return None, None, None, 'Invalid related quiz.'
+    return title, content, related_quiz_id, None
+
+
 def classify_study_task(task, today=None):
     current_date = today or datetime.now().date()
     target_date = task.get('target_date')
@@ -2841,6 +2865,174 @@ def update_study_task_status(task_id):
     finally:
         conn.close()
     return redirect(url_for('student_study_planner'))
+
+
+@app.route('/student/notes', methods=['GET'])
+@student_required
+def student_notes():
+    search = request.args.get('q', '').strip()
+    category = request.args.get('category', '').strip()
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('loading revision notes')
+        return render_template('student_notes.html', notes=[], quizzes=[], categories=[], search=search, category=category)
+
+    try:
+        with conn.cursor() as cursor:
+            conditions = ['sn.student_id = %s']
+            params = [session['user_id']]
+            if search:
+                search_pattern = f'%{search}%'
+                conditions.append('(sn.title LIKE %s OR sn.content LIKE %s)')
+                params.extend([search_pattern, search_pattern])
+            if category:
+                conditions.append('q.category = %s')
+                params.append(category)
+
+            cursor.execute(
+                """
+                SELECT sn.id, sn.student_id, sn.quiz_id, sn.title, sn.content,
+                       sn.created_at, sn.updated_at, q.title AS quiz_title, q.category AS quiz_category
+                FROM student_quiz_notes sn
+                LEFT JOIN quizzes q ON q.id = sn.quiz_id
+                WHERE """ + ' AND '.join(conditions) + """
+                ORDER BY sn.updated_at DESC, sn.id DESC
+                """,
+                tuple(params),
+            )
+            notes = cursor.fetchall() or []
+
+            cursor.execute("SELECT id, title, category FROM quizzes ORDER BY title")
+            quizzes = cursor.fetchall() or []
+            categories = sorted({quiz['category'] for quiz in quizzes if quiz.get('category')})
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading revision notes')
+        notes, quizzes, categories = [], [], []
+    finally:
+        conn.close()
+    return render_template(
+        'student_notes.html',
+        notes=notes,
+        quizzes=quizzes,
+        categories=categories,
+        search=search,
+        category=category,
+    )
+
+
+@app.route('/student/notes/create', methods=['POST'])
+@student_required
+def create_student_note():
+    title, content, quiz_id, error = validate_revision_note_input(
+        request.form.get('title'),
+        request.form.get('content'),
+        request.form.get('quiz_id'),
+    )
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('student_notes'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('creating revision note')
+        return redirect(url_for('student_notes'))
+    try:
+        with conn.cursor() as cursor:
+            if quiz_id is not None:
+                cursor.execute("SELECT id FROM quizzes WHERE id = %s", (quiz_id,))
+                if not cursor.fetchone():
+                    flash('Related quiz not found.', 'danger')
+                    return redirect(url_for('student_notes'))
+            cursor.execute(
+                """
+                INSERT INTO student_quiz_notes (student_id, quiz_id, title, content)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (session['user_id'], quiz_id, title, content),
+            )
+            conn.commit()
+            flash('Revision note created.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('creating revision note')
+    finally:
+        conn.close()
+    return redirect(url_for('student_notes'))
+
+
+@app.route('/student/notes/<int:note_id>/edit', methods=['POST'])
+@student_required
+def edit_student_note(note_id):
+    title, content, quiz_id, error = validate_revision_note_input(
+        request.form.get('title'),
+        request.form.get('content'),
+        request.form.get('quiz_id'),
+    )
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('student_notes'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('editing revision note')
+        return redirect(url_for('student_notes'))
+    try:
+        with conn.cursor() as cursor:
+            if quiz_id is not None:
+                cursor.execute("SELECT id FROM quizzes WHERE id = %s", (quiz_id,))
+                if not cursor.fetchone():
+                    flash('Related quiz not found.', 'danger')
+                    return redirect(url_for('student_notes'))
+            cursor.execute(
+                "SELECT id FROM student_quiz_notes WHERE id = %s AND student_id = %s",
+                (note_id, session['user_id']),
+            )
+            if not cursor.fetchone():
+                flash('Revision note not found.', 'danger')
+                return redirect(url_for('student_notes'))
+            cursor.execute(
+                """
+                UPDATE student_quiz_notes
+                SET quiz_id = %s, title = %s, content = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s AND student_id = %s
+                """,
+                (quiz_id, title, content, note_id, session['user_id']),
+            )
+            conn.commit()
+            flash('Revision note updated.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('editing revision note')
+    finally:
+        conn.close()
+    return redirect(url_for('student_notes'))
+
+
+@app.route('/student/notes/<int:note_id>/delete', methods=['POST'])
+@student_required
+def delete_student_note(note_id):
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('deleting revision note')
+        return redirect(url_for('student_notes'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM student_quiz_notes WHERE id = %s AND student_id = %s",
+                (note_id, session['user_id']),
+            )
+            conn.commit()
+            if cursor.rowcount:
+                flash('Revision note deleted.', 'success')
+            else:
+                flash('Revision note not found.', 'danger')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('deleting revision note')
+    finally:
+        conn.close()
+    return redirect(url_for('student_notes'))
 
 
 @app.route('/student/favorites/<int:quiz_id>/add', methods=['POST'])
