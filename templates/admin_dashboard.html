@@ -9,12 +9,13 @@
     <div class="col-md-4 text-md-end mt-3 mt-md-0">
         <a href="{{ url_for('export_quiz_results') }}" class="btn btn-outline-success shadow-sm rounded-pill px-4 me-2"><i class="fas fa-file-csv me-2"></i> Export All Results</a>
         <a href="{{ url_for('admin_audit_log') }}" class="btn btn-outline-dark shadow-sm rounded-pill px-4 me-2"><i class="fas fa-shield-alt me-2"></i> Audit Log</a>
+        <a href="{{ url_for('admin_feedback') }}" class="btn btn-outline-warning shadow-sm rounded-pill px-4 me-2"><i class="fas fa-star me-2"></i> Feedback</a>
         <a href="{{ url_for('manage_quizzes') }}" class="btn btn-primary shadow-sm rounded-pill px-4"><i class="fas fa-plus me-2"></i> New Quiz</a>
     </div>
 </div>
 
-<div class="row mb-5">
-    <div class="col-md-4 mb-4">
+<div class="row mb-5 g-4">
+    <div class="col-xl col-md-4 mb-2">
         <div class="card stat-card border-0 h-100">
             <div class="card-body">
                 <i class="fas fa-users stat-icon"></i>
@@ -24,7 +25,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4 mb-4">
+    <div class="col-xl col-md-4 mb-2">
         <div class="card stat-card border-0 h-100">
             <div class="card-body">
                 <i class="fas fa-book stat-icon text-secondary"></i>
@@ -34,12 +35,128 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4 mb-4">
+    <div class="col-xl col-md-4 mb-2">
         <div class="card stat-card border-0 h-100">
             <div class="card-body">
                 <i class="fas fa-question-circle stat-icon text-info"></i>
                 <div class="stat-value">{{ stats.questions }}</div>
                 <div class="stat-label">Total Questions</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl col-md-6 mb-2">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body">
+                <i class="fas fa-stopwatch stat-icon text-warning"></i>
+                <div class="stat-value">{{ stats.attempts }}</div>
+                <div class="stat-label">Total Quiz Attempts</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl col-md-6 mb-2">
+        <div class="card stat-card border-0 h-100">
+            <div class="card-body">
+                <i class="fas fa-percentage stat-icon text-success"></i>
+                {% if stats.average_score is not none %}
+                    <div class="stat-value">{{ stats.average_score | round(1) }}%</div>
+                {% else %}
+                    <div class="stat-value">N/A</div>
+                {% endif %}
+                <div class="stat-label">Average Quiz Score</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-5 g-4">
+    <div class="col-lg-4">
+        <div class="card border-0 h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-fire me-2 text-danger"></i> Most Popular Quizzes</h5>
+            </div>
+            <div class="card-body">
+                {% if popular_quizzes %}
+                    {% for quiz in popular_quizzes %}
+                        {% set max_attempts = popular_quizzes[0].attempt_count %}
+                        <div class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <div>
+                                    <strong class="text-dark">{{ quiz.title }}</strong>
+                                    <span class="d-block small text-muted">{{ quiz.category or 'Uncategorized' }}</span>
+                                </div>
+                                <span class="badge bg-primary rounded-pill">{{ quiz.attempt_count }} attempts</span>
+                            </div>
+                            <div class="progress" style="height: 10px;" role="progressbar"
+                                 aria-label="{{ quiz.title }} attempt count"
+                                 aria-valuemin="0" aria-valuemax="{{ max_attempts }}" aria-valuenow="{{ quiz.attempt_count }}">
+                                <div class="progress-bar rounded-pill bg-gradient" style="width: {{ (quiz.attempt_count * 100 / max_attempts) | round(1) }}%;"></div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="fas fa-chart-bar fa-2x mb-3 text-light"></i>
+                        <p class="mb-0">No completed quiz attempts yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card border-0 h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-user-plus me-2 text-success"></i> Recent Registrations</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_registrations %}
+                    <div class="list-group list-group-flush">
+                        {% for student in recent_registrations %}
+                            <div class="list-group-item px-0">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-user-circle me-2 text-primary"></i>
+                                        <strong>{{ student.username }}</strong>
+                                    </div>
+                                    <small class="text-muted">{{ student.created_at.strftime('%Y-%m-%d %H:%M') if student.created_at else 'N/A' }}</small>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="fas fa-users fa-2x mb-3 text-light"></i>
+                        <p class="mb-0">No student registrations yet.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card border-0 h-100">
+            <div class="card-header bg-transparent py-4">
+                <h5 class="mb-0 fw-bold"><i class="fas fa-history me-2 text-info"></i> Recent Quiz Activity</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_quiz_activity %}
+                    <div class="list-group list-group-flush">
+                        {% for activity in recent_quiz_activity %}
+                            <div class="list-group-item px-0">
+                                <strong>{{ activity.student_username }}</strong>
+                                <span class="text-muted"> completed </span>
+                                <strong>{{ activity.quiz_title }}</strong>
+                                <div class="d-flex justify-content-between mt-1">
+                                    <small class="text-primary fw-bold">{{ activity.percentage | round(1) }}%</small>
+                                    <small class="text-muted">{{ activity.date_taken.strftime('%Y-%m-%d %H:%M') if activity.date_taken else 'N/A' }}</small>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4 text-muted">
+                        <i class="fas fa-clipboard-check fa-2x mb-3 text-light"></i>
+                        <p class="mb-0">No quiz activity yet.</p>
+                    </div>
+                {% endif %}
             </div>
         </div>
     </div>

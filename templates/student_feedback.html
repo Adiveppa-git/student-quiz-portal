@@ -1,0 +1,132 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="fas fa-star text-warning me-2"></i>Quiz Feedback</h2>
+        <p class="text-muted mb-0">Rate quizzes you have completed and share your experience.</p>
+    </div>
+    <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-primary rounded-pill px-4">Back to Dashboard</a>
+</div>
+
+{% if completed_quizzes %}
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body p-4">
+        <h5 class="fw-bold mb-3">Submit Feedback</h5>
+        <form method="POST" action="{{ url_for('create_student_feedback') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="row g-3">
+                <div class="col-md-5">
+                    <label class="form-label fw-bold" for="feedback-quiz">Completed quiz</label>
+                    <select class="form-select" id="feedback-quiz" name="quiz_id" required>
+                        <option value="">Select a quiz</option>
+                        {% for quiz in completed_quizzes %}
+                        <option value="{{ quiz.id }}">{{ quiz.title }}{% if quiz.category %} - {{ quiz.category }}{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw-bold">Rating</label>
+                    <select class="form-select" name="rating" required aria-label="Rating">
+                        <option value="">Choose</option>
+                        {% for rating in range(1, 6) %}
+                        <option value="{{ rating }}">{{ rating }} star{% if rating != 1 %}s{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label fw-bold" for="feedback-text">Written feedback</label>
+                    <textarea class="form-control" id="feedback-text" name="feedback" maxlength="1000" rows="3" placeholder="What worked well or could be improved?"></textarea>
+                </div>
+                <div class="col-12">
+                    <button type="submit" class="btn btn-warning rounded-pill px-4"><i class="fas fa-paper-plane me-2"></i>Submit Feedback</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info border-0 shadow-sm">Complete a quiz before submitting feedback.</div>
+{% endif %}
+
+<form method="GET" class="row g-3 mb-4" aria-label="Search feedback">
+    <div class="col-md-6">
+        <input class="form-control" type="search" name="q" value="{{ search }}" placeholder="Search by quiz or feedback">
+    </div>
+    <div class="col-md-4">
+        <select class="form-select" name="category">
+            <option value="">All categories</option>
+            {% for category_name in categories %}
+            <option value="{{ category_name }}" {% if category == category_name %}selected{% endif %}>{{ category_name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-outline-primary w-100" type="submit"><i class="fas fa-search me-1"></i>Search</button>
+    </div>
+</form>
+
+{% if feedback_entries %}
+<div class="row g-4">
+    {% for entry in feedback_entries %}
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body p-4">
+                <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+                    <div>
+                        <h5 class="fw-bold mb-1">{{ entry.quiz_title }}</h5>
+                        {% if entry.quiz_category %}<div class="small text-muted mb-2">{{ entry.quiz_category }}</div>{% endif %}
+                        <div class="text-warning mb-2" aria-label="{{ entry.rating }} out of 5 stars">
+                            {% for star in range(1, 6) %}
+                            <i class="{% if star <= entry.rating %}fas{% else %}far{% endif %} fa-star"></i>
+                            {% endfor %}
+                        </div>
+                        <p class="mb-2">{{ entry.feedback or 'No written feedback provided.' }}</p>
+                        <small class="text-muted">Updated {{ entry.updated_at }}</small>
+                    </div>
+                    <div class="d-flex gap-2 align-items-start">
+                        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-feedback-{{ entry.id }}">
+                            <i class="fas fa-edit me-1"></i>Edit
+                        </button>
+                        <form method="POST" action="{{ url_for('delete_student_feedback', feedback_id=entry.id) }}" onsubmit="return confirm('Delete this feedback?');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn btn-sm btn-outline-danger" type="submit"><i class="fas fa-trash me-1"></i>Delete</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="collapse mt-3" id="edit-feedback-{{ entry.id }}">
+                    <form method="POST" action="{{ url_for('edit_student_feedback', feedback_id=entry.id) }}" class="border-top pt-3">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="quiz_id" value="{{ entry.quiz_id }}">
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">Rating</label>
+                                <select class="form-select" name="rating" required>
+                                    {% for rating in range(1, 6) %}
+                                    <option value="{{ rating }}" {% if rating == entry.rating %}selected{% endif %}>{{ rating }} star{% if rating != 1 %}s{% endif %}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-12">
+                                <label class="form-label fw-bold">Written feedback</label>
+                                <textarea class="form-control" name="feedback" maxlength="1000" rows="3">{{ entry.feedback }}</textarea>
+                            </div>
+                            <div class="col-12"><button class="btn btn-primary rounded-pill px-4" type="submit">Save Changes</button></div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5 text-muted">
+        <i class="far fa-star fa-3x mb-3"></i>
+        <h5 class="fw-bold">No feedback yet</h5>
+        <p class="mb-0">Submit feedback for a completed quiz or adjust your search.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

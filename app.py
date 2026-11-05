@@ -139,6 +139,27 @@ def validate_revision_note_input(title, content, quiz_id):
     return title, content, related_quiz_id, None
 
 
+def validate_quiz_feedback_input(quiz_id, rating, feedback):
+    try:
+        quiz_value = str(quiz_id).strip() if quiz_id is not None else ''
+        parsed_quiz_id = int(quiz_value)
+    except (AttributeError, TypeError, ValueError):
+        return None, None, None, 'Please select a valid completed quiz.'
+    if parsed_quiz_id <= 0:
+        return None, None, None, 'Please select a valid completed quiz.'
+    try:
+        rating_value = str(rating).strip() if rating is not None else ''
+        parsed_rating = int(rating_value)
+    except (AttributeError, TypeError, ValueError):
+        return None, None, None, 'Rating must be a whole number from 1 to 5.'
+    if parsed_rating < 1 or parsed_rating > 5:
+        return None, None, None, 'Rating must be between 1 and 5 stars.'
+    feedback_text = (feedback or '').strip()
+    if len(feedback_text) > 1000:
+        return None, None, None, 'Feedback must be 1000 characters or fewer.'
+    return parsed_quiz_id, parsed_rating, feedback_text, None
+
+
 def classify_study_task(task, today=None):
     current_date = today or datetime.now().date()
     target_date = task.get('target_date')
@@ -1367,6 +1388,80 @@ def admin_dashboard():
         popular_quizzes=popular_quizzes,
         recent_registrations=recent_registrations,
         recent_quiz_activity=recent_quiz_activity,
+    )
+
+
+@app.route('/admin/feedback')
+@admin_required
+def admin_feedback():
+    conn = get_db_connection()
+    overall_average = None
+    rating_distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    per_quiz = []
+    recent_feedback = []
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT AVG(rating) AS average_rating, COUNT(*) AS total_ratings
+                    FROM student_quiz_feedback
+                    """
+                )
+                overall = cursor.fetchone() or {}
+                overall_average = overall.get('average_rating')
+
+                cursor.execute(
+                    """
+                    SELECT rating, COUNT(*) AS rating_count
+                    FROM student_quiz_feedback
+                    GROUP BY rating
+                    ORDER BY rating
+                    """
+                )
+                distribution = cursor.fetchall() or []
+                for row in distribution:
+                    rating = row.get('rating')
+                    if rating in rating_distribution:
+                        rating_distribution[rating] = row.get('rating_count', 0)
+
+                cursor.execute(
+                    """
+                    SELECT q.id, q.title, q.category,
+                           AVG(sf.rating) AS average_rating,
+                           COUNT(sf.id) AS rating_count
+                    FROM quizzes q
+                    JOIN student_quiz_feedback sf ON sf.quiz_id = q.id
+                    GROUP BY q.id, q.title, q.category
+                    ORDER BY average_rating DESC, q.title ASC
+                    """
+                )
+                per_quiz = cursor.fetchall() or []
+
+                cursor.execute(
+                    """
+                    SELECT sf.id, sf.rating, sf.feedback, sf.created_at, sf.updated_at,
+                           q.title AS quiz_title, q.category AS quiz_category
+                    FROM student_quiz_feedback sf
+                    JOIN quizzes q ON q.id = sf.quiz_id
+                    ORDER BY sf.created_at DESC, sf.id DESC
+                    LIMIT 20
+                    """
+                )
+                recent_feedback = cursor.fetchall() or []
+        except pymysql.MySQLError:
+            rollback_db(conn)
+            flash_database_error('loading feedback analytics')
+        finally:
+            conn.close()
+    else:
+        flash_database_error('loading feedback analytics')
+    return render_template(
+        'admin_feedback.html',
+        overall_average=overall_average,
+        rating_distribution=rating_distribution,
+        per_quiz=per_quiz,
+        recent_feedback=recent_feedback,
     )
 
 @app.route('/admin/audit-log')
@@ -3033,6 +3128,205 @@ def delete_student_note(note_id):
     finally:
         conn.close()
     return redirect(url_for('student_notes'))
+
+
+@app.route('/student/feedback', methods=['GET'])
+@student_required
+def student_feedback():
+    search = request.args.get('q', '').strip()
+    category = request.args.get('category', '').strip()
+    conn = get_db_connection()
+    completed_quizzes = []
+    feedback_entries = []
+    categories = []
+    if conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT q.id, q.title, q.category
+                    FROM results r
+                    JOIN quizzes q ON q.id = r.quiz_id
+                    WHERE r.user_id = %s
+                    ORDER BY q.title
+                    """,
+                    (session['user_id'],),
+                )
+                completed_quizzes = cursor.fetchall() or []
+                categories = sorted({quiz['category'] for quiz in completed_quizzes if quiz.get('category')})
+
+                conditions = ['sf.student_id = %s']
+                params = [session['user_id']]
+                if search:
+                    pattern = f'%{search}%'
+                    conditions.append('(q.title LIKE %s OR sf.feedback LIKE %s)')
+                    params.extend([pattern, pattern])
+                if category:
+                    conditions.append('q.category = %s')
+                    params.append(category)
+                cursor.execute(
+                    """
+                    SELECT sf.id, sf.student_id, sf.quiz_id, sf.rating, sf.feedback,
+                           sf.created_at, sf.updated_at, q.title AS quiz_title, q.category AS quiz_category
+                    FROM student_quiz_feedback sf
+                    JOIN quizzes q ON q.id = sf.quiz_id
+                    WHERE """ + ' AND '.join(conditions) + """
+                    ORDER BY sf.updated_at DESC, sf.id DESC
+                    """,
+                    tuple(params),
+                )
+                feedback_entries = cursor.fetchall() or []
+        except pymysql.MySQLError:
+            rollback_db(conn)
+            flash_database_error('loading quiz feedback')
+            completed_quizzes, feedback_entries, categories = [], [], []
+        finally:
+            conn.close()
+    else:
+        flash_database_error('loading quiz feedback')
+    return render_template(
+        'student_feedback.html',
+        completed_quizzes=completed_quizzes,
+        feedback_entries=feedback_entries,
+        categories=categories,
+        search=search,
+        category=category,
+    )
+
+
+@app.route('/student/feedback/create', methods=['POST'])
+@student_required
+def create_student_feedback():
+    quiz_id, rating, feedback, error = validate_quiz_feedback_input(
+        request.form.get('quiz_id'),
+        request.form.get('rating'),
+        request.form.get('feedback'),
+    )
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('student_feedback'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('submitting quiz feedback')
+        return redirect(url_for('student_feedback'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
+                (session['user_id'], quiz_id),
+            )
+            if not cursor.fetchone():
+                flash('Feedback can only be submitted for a completed quiz.', 'danger')
+                return redirect(url_for('student_feedback'))
+            cursor.execute(
+                "SELECT id FROM student_quiz_feedback WHERE student_id = %s AND quiz_id = %s",
+                (session['user_id'], quiz_id),
+            )
+            if cursor.fetchone():
+                flash('You have already submitted feedback for this quiz.', 'info')
+                return redirect(url_for('student_feedback'))
+            cursor.execute(
+                """
+                INSERT INTO student_quiz_feedback (student_id, quiz_id, rating, feedback)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (session['user_id'], quiz_id, rating, feedback),
+            )
+            conn.commit()
+            flash('Quiz feedback submitted.', 'success')
+    except pymysql.IntegrityError:
+        rollback_db(conn)
+        flash('You have already submitted feedback for this quiz.', 'info')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('submitting quiz feedback')
+    finally:
+        conn.close()
+    return redirect(url_for('student_feedback'))
+
+
+@app.route('/student/feedback/<int:feedback_id>/edit', methods=['POST'])
+@student_required
+def edit_student_feedback(feedback_id):
+    quiz_id, rating, feedback, error = validate_quiz_feedback_input(
+        request.form.get('quiz_id'),
+        request.form.get('rating'),
+        request.form.get('feedback'),
+    )
+    if error:
+        flash(error, 'danger')
+        return redirect(url_for('student_feedback'))
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('editing quiz feedback')
+        return redirect(url_for('student_feedback'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, quiz_id FROM student_quiz_feedback
+                WHERE id = %s AND student_id = %s
+                """,
+                (feedback_id, session['user_id']),
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                flash('Feedback not found.', 'danger')
+                return redirect(url_for('student_feedback'))
+            if existing['quiz_id'] != quiz_id:
+                flash('The associated quiz cannot be changed.', 'danger')
+                return redirect(url_for('student_feedback'))
+            cursor.execute(
+                "SELECT id FROM results WHERE user_id = %s AND quiz_id = %s",
+                (session['user_id'], quiz_id),
+            )
+            if not cursor.fetchone():
+                flash('Feedback can only be edited for a completed quiz.', 'danger')
+                return redirect(url_for('student_feedback'))
+            cursor.execute(
+                """
+                UPDATE student_quiz_feedback
+                SET rating = %s, feedback = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s AND student_id = %s
+                """,
+                (rating, feedback, feedback_id, session['user_id']),
+            )
+            conn.commit()
+            flash('Quiz feedback updated.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('editing quiz feedback')
+    finally:
+        conn.close()
+    return redirect(url_for('student_feedback'))
+
+
+@app.route('/student/feedback/<int:feedback_id>/delete', methods=['POST'])
+@student_required
+def delete_student_feedback(feedback_id):
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('deleting quiz feedback')
+        return redirect(url_for('student_feedback'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM student_quiz_feedback WHERE id = %s AND student_id = %s",
+                (feedback_id, session['user_id']),
+            )
+            conn.commit()
+            if cursor.rowcount:
+                flash('Quiz feedback deleted.', 'success')
+            else:
+                flash('Feedback not found.', 'danger')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('deleting quiz feedback')
+    finally:
+        conn.close()
+    return redirect(url_for('student_feedback'))
 
 
 @app.route('/student/favorites/<int:quiz_id>/add', methods=['POST'])
