@@ -2526,7 +2526,18 @@ def student_dashboard():
     if conn:
         try:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM quizzes ORDER BY created_at DESC")
+                cursor.execute(
+                    """
+                    SELECT q.*,
+                           EXISTS (
+                               SELECT 1 FROM student_quiz_bookmarks b
+                               WHERE b.student_id = %s AND b.quiz_id = q.id
+                           ) AS is_bookmarked
+                    FROM quizzes q
+                    ORDER BY q.created_at DESC
+                    """,
+                    (session['user_id'],),
+                )
                 quizzes = cursor.fetchall()
                 for quiz in quizzes:
                     quiz['availability_status'] = classify_quiz_availability(quiz)
@@ -2554,6 +2565,105 @@ def student_dashboard():
         quizzes=quizzes,
         achievements=[item for item in achievements if item['earned']][:4],
         achievement_error=achievement_error,
+    )
+
+@app.route('/student/favorites/<int:quiz_id>/add', methods=['POST'])
+@student_required
+def add_quiz_favorite(quiz_id):
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(request.referrer or url_for('student_dashboard'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM quizzes WHERE id = %s", (quiz_id,))
+            if not cursor.fetchone():
+                flash('Quiz not found.', 'danger')
+                return redirect(request.referrer or url_for('student_dashboard'))
+            cursor.execute(
+                """
+                INSERT IGNORE INTO student_quiz_bookmarks (student_id, quiz_id)
+                VALUES (%s, %s)
+                """,
+                (session['user_id'], quiz_id),
+            )
+            if cursor.rowcount == 0:
+                flash('This quiz is already in your favorites.', 'info')
+            else:
+                conn.commit()
+                flash('Quiz added to your favorites.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating your favorites')
+    finally:
+        close_db_connection(conn)
+    return redirect(request.referrer or url_for('student_dashboard'))
+
+
+@app.route('/student/favorites/<int:quiz_id>/remove', methods=['POST'])
+@student_required
+def remove_quiz_favorite(quiz_id):
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(request.referrer or url_for('student_favorites'))
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM student_quiz_bookmarks
+                WHERE student_id = %s AND quiz_id = %s
+                """,
+                (session['user_id'], quiz_id),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                flash('This quiz is not in your favorites.', 'info')
+            else:
+                flash('Quiz removed from your favorites.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating your favorites')
+    finally:
+        close_db_connection(conn)
+    return redirect(request.referrer or url_for('student_favorites'))
+
+
+@app.route('/student/favorites')
+@student_required
+def student_favorites():
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return render_template('student_favorites.html', favorites=[], favorite_error=True)
+    favorites = []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT q.id, q.title, q.description, q.category,
+                       q.time_limit_minutes, q.available_from, q.available_until,
+                       b.created_at AS bookmarked_at
+                FROM student_quiz_bookmarks b
+                JOIN quizzes q ON q.id = b.quiz_id
+                WHERE b.student_id = %s
+                ORDER BY b.created_at DESC
+                """,
+                (session['user_id'],),
+            )
+            favorites = cursor.fetchall()
+            for quiz in favorites:
+                quiz['availability_status'] = classify_quiz_availability(quiz)
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading your favorites')
+        favorite_error = True
+    finally:
+        close_db_connection(conn)
+    return render_template(
+        'student_favorites.html',
+        favorites=favorites,
+        favorite_error=locals().get('favorite_error', False),
     )
 
 @app.route('/student/quiz/<int:quiz_id>', methods=['GET'])

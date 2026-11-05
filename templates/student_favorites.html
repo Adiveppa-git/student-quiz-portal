@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h2 class="fw-bold mb-1"><i class="fas fa-heart me-2 text-danger"></i> My Favorite Quizzes</h2>
+        <p class="text-muted mb-0">Keep track of quizzes you want to revisit.</p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-primary rounded-pill px-4">
+            <i class="fas fa-arrow-left me-1"></i> Dashboard
+        </a>
+    </div>
+</div>
+
+{% if favorites %}
+<div class="row g-4">
+    {% for quiz in favorites %}
+    <div class="col-md-6 col-lg-4">
+        <div class="card h-100 border-0 shadow-sm quiz-card">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <h5 class="card-title fw-bold text-dark mb-0 pe-2">{{ quiz.title }}</h5>
+                    {% if quiz.category %}
+                        <span class="badge bg-primary bg-opacity-10 text-primary rounded-pill px-3 py-2">{{ quiz.category }}</span>
+                    {% endif %}
+                </div>
+                {% if quiz.availability_status == 'upcoming' %}
+                    <span class="badge bg-info bg-opacity-10 text-info mb-3">Upcoming</span>
+                {% elif quiz.availability_status == 'closed' %}
+                    <span class="badge bg-secondary bg-opacity-10 text-secondary mb-3">Closed</span>
+                {% else %}
+                    <span class="badge bg-success bg-opacity-10 text-success mb-3">Active</span>
+                {% endif %}
+                <p class="card-text text-muted mb-4">{{ quiz.description[:140] if quiz.description else '' }}{% if quiz.description and quiz.description|length > 140 %}...{% endif %}</p>
+                <div class="text-muted small fw-bold">
+                    <span><i class="far fa-clock me-1 text-primary"></i> {{ quiz.time_limit_minutes }} mins</span>
+                </div>
+            </div>
+            <div class="card-footer bg-transparent border-top-0 px-4 pb-4 pt-0">
+                {% if quiz.availability_status == 'active' %}
+                    <a href="{{ url_for('take_quiz', quiz_id=quiz.id) }}" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold mb-2">Start Quiz</a>
+                {% elif quiz.availability_status == 'upcoming' %}
+                    <button type="button" class="btn btn-outline-info w-100 rounded-pill py-2 fw-bold mb-2" disabled>Not Started Yet</button>
+                {% else %}
+                    <button type="button" class="btn btn-outline-secondary w-100 rounded-pill py-2 fw-bold mb-2" disabled>Quiz Closed</button>
+                {% endif %}
+                <form method="POST" action="{{ url_for('remove_quiz_favorite', quiz_id=quiz.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-danger w-100 rounded-pill py-2 fw-bold">
+                        <i class="fas fa-heart-broken me-1"></i> Remove Favorite
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="fas fa-heart fa-3x text-light mb-3"></i>
+        <h4 class="fw-bold text-dark">You have no favorite quizzes yet</h4>
+        <p class="text-muted mb-4">Browse quizzes and use the heart button to save one for later.</p>
+        <a href="{{ url_for('student_dashboard') }}" class="btn btn-primary rounded-pill px-4">Browse Quizzes</a>
+    </div>
+</div>
+{% endif %}
+
+<style>
+    .quiz-card { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+    .quiz-card:hover { border-color: var(--primary-color) !important; box-shadow: 0 10px 25px -5px rgba(79, 70, 229, 0.1) !important; }
+</style>
+{% endblock %}

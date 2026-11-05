@@ -12,6 +12,7 @@
         <a href="{{ url_for('student_progress') }}" class="btn btn-outline-info rounded-pill px-4 shadow-sm me-2"><i class="fas fa-chart-line me-1"></i> Progress</a>
         <a href="{{ url_for('student_subject_analysis') }}" class="btn btn-outline-secondary rounded-pill px-4 shadow-sm me-2"><i class="fas fa-layer-group me-1"></i> Subjects</a>
         <a href="{{ url_for('student_quiz_recommendations') }}" class="btn btn-outline-danger rounded-pill px-4 shadow-sm me-2"><i class="fas fa-lightbulb me-1"></i> Recommendations</a>
+        <a href="{{ url_for('student_favorites') }}" class="btn btn-outline-dark rounded-pill px-4 shadow-sm me-2"><i class="fas fa-heart me-1"></i> Favorites</a>
         <a href="{{ url_for('student_history') }}" class="btn btn-outline-primary rounded-pill px-4 shadow-sm"><i class="fas fa-history me-1"></i> My History</a>
     </div>
 </div>
@@ -83,6 +84,13 @@
                     </div>
                 </div>
                 <div class="card-footer bg-transparent border-top-0 pt-0 pb-4 px-4">
+                    <form method="POST" action="{{ url_for('remove_quiz_favorite', quiz_id=quiz.id) if quiz.is_bookmarked else url_for('add_quiz_favorite', quiz_id=quiz.id) }}" class="mb-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn {% if quiz.is_bookmarked %}btn-outline-danger{% else %}btn-outline-dark{% endif %} w-100 rounded-pill py-2 fw-bold">
+                            <i class="{% if quiz.is_bookmarked %}fas{% else %}far{% endif %} fa-heart me-1"></i>
+                            {% if quiz.is_bookmarked %}Remove Favorite{% else %}Add to Favorites{% endif %}
+                        </button>
+                    </form>
                     {% if quiz.availability_status == 'active' %}
                         <a href="{{ url_for('take_quiz', quiz_id=quiz.id) }}" class="btn btn-primary w-100 rounded-pill py-2 shadow-sm fw-bold">
                             Start Quiz <i class="fas fa-arrow-right ms-2"></i>
