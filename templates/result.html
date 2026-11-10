@@ -39,6 +39,9 @@
                     <a href="{{ url_for('student_dashboard') }}" class="btn btn-outline-secondary btn-lg rounded-pill px-5 fw-bold">
                         <i class="fas fa-home me-2"></i> Dashboard
                     </a>
+                    <a href="{{ url_for('student_certificate', result_id=result.id) }}" class="btn btn-outline-success btn-lg rounded-pill px-5 fw-bold">
+                        <i class="fas fa-award me-2"></i> Certificate
+                    </a>
                     <a href="{{ url_for('student_quiz_review', quiz_id=review_quiz_id) }}" class="btn btn-outline-primary btn-lg rounded-pill px-5 fw-bold">
                         <i class="fas fa-list-check me-2"></i> Review Answers
                     </a>

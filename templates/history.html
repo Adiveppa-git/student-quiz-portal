@@ -155,6 +155,11 @@
                                                 Review
                                             </a>
                                         {% endif %}
+                                        {% if r.id is defined and r.total_questions and r.total_questions > 0 %}
+                                            <a href="{{ url_for('student_certificate', result_id=r.id) }}" class="btn btn-sm btn-outline-success rounded-pill ms-2">
+                                                Certificate
+                                            </a>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
