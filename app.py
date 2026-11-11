@@ -924,6 +924,37 @@ def save_quiz_result_answers(cursor, result_id, submitted_answers):
         """, (result_id, int(question_id), selected_option))
 
 
+def create_quiz_result_notification(cursor, student_id, quiz_id):
+    cursor.execute("""
+        INSERT IGNORE INTO student_notifications
+            (student_id, title, message, notification_type, related_quiz_id)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        student_id,
+        'Quiz result recorded',
+        'Your quiz has been completed. View your result for details.',
+        'quiz_result',
+        quiz_id,
+    ))
+
+
+def create_quiz_available_notifications(cursor, quiz_id):
+    cursor.execute("""
+        INSERT IGNORE INTO student_notifications
+            (student_id, title, message, notification_type, related_quiz_id)
+        SELECT u.id,
+               'New quiz available',
+               CONCAT('A new quiz, "', q.title, '", is available to take.'),
+               'quiz_available',
+               q.id
+        FROM users u
+        JOIN quizzes q ON q.id = %s
+        WHERE u.role = 'student'
+          AND (q.available_from IS NULL OR UTC_TIMESTAMP() >= q.available_from)
+          AND (q.available_until IS NULL OR UTC_TIMESTAMP() <= q.available_until)
+    """, (quiz_id,))
+
+
 def compare_review_answer(question):
     selected = question.get('selected_option')
     correct = question.get('correct_option')
@@ -2231,6 +2262,7 @@ def manage_quizzes():
                         quiz_id,
                         request.form.getlist('bank_question_ids'),
                     )
+                    create_quiz_available_notifications(cursor, quiz_id)
                     conn.commit()
                     record_admin_audit(
                         session['user_id'],
@@ -2686,6 +2718,7 @@ def student_dashboard():
     quizzes = []
     achievements = []
     upcoming_study_tasks = []
+    unread_notification_count = 0
     achievement_error = False
     
     if conn:
@@ -2715,6 +2748,30 @@ def student_dashboard():
                     (session['user_id'],),
                 )
                 achievements = calculate_student_achievements(cursor.fetchall())
+                unread_notification_count = 0
+                try:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS unread_count
+                        FROM student_notifications
+                        WHERE student_id = %s AND is_read = FALSE
+                        """,
+                        (session['user_id'],),
+                    )
+                    unread_row = cursor.fetchone()
+
+                    if isinstance(unread_row, dict):
+                        raw_unread_count = unread_row.get('unread_count', 0)
+                        if type(raw_unread_count) is int and raw_unread_count >= 0:
+                            unread_notification_count = raw_unread_count
+
+                except pymysql.MySQLError:
+                    unread_notification_count = 0
+                    rollback_db(conn)
+                    app.logger.warning(
+                        'Could not load unread notification count for student dashboard.'
+                    )
+
                 cursor.execute(
                     """
                     SELECT st.id, st.title, st.description, st.quiz_id, st.target_date,
@@ -2747,6 +2804,7 @@ def student_dashboard():
         achievements=[item for item in achievements if item['earned']][:4],
         achievement_error=achievement_error,
         upcoming_study_tasks=upcoming_study_tasks,
+        unread_notification_count=unread_notification_count if conn else 0,
     )
 
 @app.route('/student/study-planner')
@@ -3577,6 +3635,11 @@ def submit_quiz(quiz_id):
                         submitted_result['id'],
                         submitted_answers,
                     )
+                    create_quiz_result_notification(
+                        cursor,
+                        session['user_id'],
+                        quiz_id,
+                    )
                 conn.commit()
             except pymysql.err.IntegrityError:
                 rollback_db(conn)
@@ -3615,6 +3678,48 @@ def student_result(quiz_id):
             return render_template('result.html', result=result, review_quiz_id=quiz_id)
     finally:
         conn.close()
+
+@app.route('/student/certificate/<int:result_id>')
+@student_required
+def student_certificate(result_id):
+    conn = get_db_connection()
+    if not conn:
+        flash('Database connection failed. Please try again.', 'danger')
+        return redirect(url_for('student_history'))
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT r.id, r.score, r.total_questions, r.date_taken,
+                       q.title AS quiz_title, u.username AS student_name
+                FROM results r
+                JOIN quizzes q ON q.id = r.quiz_id
+                JOIN users u ON u.id = r.user_id
+                WHERE r.id = %s
+                  AND r.user_id = %s
+                  AND r.total_questions > 0
+                  AND r.score BETWEEN 0 AND r.total_questions
+            """, (result_id, session['user_id']))
+            certificate = cursor.fetchone()
+
+        if not certificate:
+            return 'Certificate not found.', 404
+
+        percentage = round(
+            certificate['score'] * 100.0 / certificate['total_questions'],
+            1,
+        )
+        return render_template(
+            'certificate.html',
+            certificate=certificate,
+            percentage=percentage,
+        )
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading your certificate')
+        return redirect(url_for('student_history'))
+    finally:
+        close_db_connection(conn)
 
 @app.route('/student/result/<int:quiz_id>/review')
 @student_required
@@ -3720,6 +3825,133 @@ def student_history():
         results=results,
         performance=performance,
     )
+
+
+@app.route('/student/notifications')
+@student_required
+def student_notifications():
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('loading your notifications')
+        return redirect(url_for('student_dashboard'))
+
+    notifications = []
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT n.id, n.title, n.message, n.notification_type,
+                       n.related_quiz_id, n.is_read, n.created_at,
+                       q.title AS quiz_title
+                FROM student_notifications n
+                LEFT JOIN quizzes q ON q.id = n.related_quiz_id
+                WHERE n.student_id = %s
+                ORDER BY n.created_at DESC, n.id DESC
+            """, (session['user_id'],))
+            notifications = cursor.fetchall()
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('loading your notifications')
+        return redirect(url_for('student_dashboard'))
+    finally:
+        close_db_connection(conn)
+
+    unread_count = sum(1 for notification in notifications if not notification['is_read'])
+    return render_template(
+        'student_notifications.html',
+        notifications=notifications,
+        unread_notification_count=unread_count,
+    )
+
+
+@app.route('/student/notifications/<int:notification_id>/read', methods=['POST'])
+@student_required
+def mark_student_notification_read(notification_id):
+    if notification_id <= 0:
+        return 'Notification not found.', 404
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('updating your notification')
+        return redirect(url_for('student_notifications'))
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE student_notifications
+                SET is_read = TRUE
+                WHERE id = %s AND student_id = %s
+            """, (notification_id, session['user_id']))
+            if cursor.rowcount == 0:
+                cursor.execute("""
+                    SELECT id
+                    FROM student_notifications
+                    WHERE id = %s AND student_id = %s
+                """, (notification_id, session['user_id']))
+                if not cursor.fetchone():
+                    return 'Notification not found.', 404
+        conn.commit()
+        flash('Notification marked as read.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating your notification')
+    finally:
+        close_db_connection(conn)
+    return redirect(url_for('student_notifications'))
+
+
+@app.route('/student/notifications/read-all', methods=['POST'])
+@student_required
+def mark_all_student_notifications_read():
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('updating your notifications')
+        return redirect(url_for('student_notifications'))
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE student_notifications
+                SET is_read = TRUE
+                WHERE student_id = %s AND is_read = FALSE
+            """, (session['user_id'],))
+        conn.commit()
+        flash('All notifications marked as read.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('updating your notifications')
+    finally:
+        close_db_connection(conn)
+    return redirect(url_for('student_notifications'))
+
+
+@app.route('/student/notifications/<int:notification_id>/delete', methods=['POST'])
+@student_required
+def delete_student_notification(notification_id):
+    if notification_id <= 0:
+        return 'Notification not found.', 404
+
+    conn = get_db_connection()
+    if not conn:
+        flash_database_error('deleting your notification')
+        return redirect(url_for('student_notifications'))
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM student_notifications
+                WHERE id = %s AND student_id = %s
+            """, (notification_id, session['user_id']))
+            if cursor.rowcount == 0:
+                return 'Notification not found.', 404
+        conn.commit()
+        flash('Notification deleted.', 'success')
+    except pymysql.MySQLError:
+        rollback_db(conn)
+        flash_database_error('deleting your notification')
+    finally:
+        close_db_connection(conn)
+    return redirect(url_for('student_notifications'))
+
 
 @app.route('/student/subject-analysis')
 @student_required
