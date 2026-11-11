@@ -1,0 +1,84 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3 mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="fas fa-bell me-2 text-primary"></i> Notifications</h2>
+        <p class="text-muted mb-0">
+            {% if unread_notification_count %}
+            You have {{ unread_notification_count }} unread notification{% if unread_notification_count != 1 %}s{% endif %}.
+            {% else %}
+            You are all caught up.
+            {% endif %}
+        </p>
+    </div>
+    {% if unread_notification_count %}
+    <form method="POST" action="{{ url_for('mark_all_student_notifications_read') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-outline-primary rounded-pill">
+            <i class="fas fa-check-double me-1"></i> Mark all as read
+        </button>
+    </form>
+    {% endif %}
+</div>
+
+{% if notifications %}
+<div class="d-flex flex-column gap-3">
+    {% for notification in notifications %}
+    <article class="card border-0 shadow-sm {% if not notification.is_read %}border-start border-4 border-primary{% endif %}">
+        <div class="card-body">
+            <div class="d-flex flex-column flex-md-row justify-content-between gap-3">
+                <div class="flex-grow-1">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <h5 class="fw-bold mb-0">{{ notification.title }}</h5>
+                        {% if not notification.is_read %}
+                        <span class="badge rounded-pill bg-primary">Unread</span>
+                        {% else %}
+                        <span class="badge rounded-pill bg-secondary">Read</span>
+                        {% endif %}
+                        <span class="badge rounded-pill bg-light text-dark border">
+                            {{ notification.notification_type|replace('_', ' ')|title }}
+                        </span>
+                    </div>
+                    <p class="text-muted mb-2">{{ notification.message }}</p>
+                    <small class="text-muted">
+                        <i class="far fa-clock me-1"></i>
+                        {{ notification.created_at.strftime('%b %d, %Y at %I:%M %p') if notification.created_at else 'Date unavailable' }}
+                    </small>
+                </div>
+                <div class="d-flex flex-wrap align-items-start gap-2">
+                    {% if notification.related_quiz_id and notification.notification_type == 'quiz_result' %}
+                    <a href="{{ url_for('student_result', quiz_id=notification.related_quiz_id) }}" class="btn btn-sm btn-outline-primary rounded-pill">
+                        View result
+                    </a>
+                    {% elif notification.related_quiz_id and notification.notification_type == 'quiz_available' %}
+                    <a href="{{ url_for('take_quiz', quiz_id=notification.related_quiz_id) }}" class="btn btn-sm btn-outline-primary rounded-pill">
+                        View quiz
+                    </a>
+                    {% endif %}
+                    {% if not notification.is_read %}
+                    <form method="POST" action="{{ url_for('mark_student_notification_read', notification_id=notification.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-outline-success rounded-pill">Mark read</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('delete_student_notification', notification_id=notification.id) }}" onsubmit="return confirm('Delete this notification?');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+        <i class="far fa-bell-slash fa-3x text-muted mb-3"></i>
+        <h5 class="fw-bold">No notifications yet</h5>
+        <p class="text-muted mb-0">Updates about available quizzes and completed results will appear here.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
